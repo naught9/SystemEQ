@@ -55,6 +55,10 @@ public struct AutoEQOptions: Sendable, Equatable {
     public var minimizeMeanError = true
     public var peakingFilterCount = 8
     public var sampleRate = 48_000.0
+    /// Rigs the source and target were measured on. When both are known and differ, the target is
+    /// converted to the source's rig before equalizing. (Not part of AutoEq.)
+    public var sourceRig: MeasurementRig?
+    public var targetRig: MeasurementRig?
 
     public init() {}
 }
@@ -85,6 +89,10 @@ public enum AutoEQ {
     /// Generates a parametric EQ that makes `source` sound like `target`.
     public static func fit(source: FrequencyResponse, target: FrequencyResponse, name: String, options: AutoEQOptions = AutoEQOptions()) -> AutoEQResult {
         let grid = frequencies(step: step)
+        var target = target
+        if let sourceRig = options.sourceRig, let targetRig = options.targetRig {
+            target = target.converted(from: targetRig, to: sourceRig)
+        }
 
         // FrequencyResponse.process: interpolate, center, compensate.
         var raw = interpolate(source, to: grid)

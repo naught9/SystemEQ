@@ -45,6 +45,10 @@ SystemEQ follows your default output device, so switching outputs or plugging in
 - A **private aggregate device** built on the current output device receives the tap. Its audio callback runs the EQ and writes to the device.
 - If SystemEQ quits or crashes, macOS removes the tap and audio plays directly again.
 
+## Rig conversion
+
+IEM measurements and targets come from different rigs, mainly the IEC 711 coupler used by most squig.link databases and the B&K 5128 used for newer targets such as Harman 2025 MoA. In the AutoEQ window, each source and target has a "Measured on" setting, guessed from "711" or "5128" in its file or folder name. When the rigs differ, the target is converted to the source's rig before fitting, using the median 5128 − 711 difference over 93 IEMs measured on both. It's accurate to about a decibel up to 4 kHz; above 8 kHz only the smoothed average applies, as individual IEMs vary by several dB there. See `scripts/rig-conversion`.
+
 ## AutoEq port
 
 `Sources/EQCore/AutoEQ.swift` ports AutoEq's `process` (interpolation, centring, compensation, Savitzky-Golay smoothing, slope limiting) and `optimize_parametric_eq` (filter initialisation, loss with sharpness penalty). The equalization curve matches the original exactly. SciPy's SLSQP optimizer is replaced by Levenberg-Marquardt on the same loss, run to convergence instead of autoeq.app's 0.5 s limit, so filters typically differ from autoeq.app's by under 0.15 dB RMS and the preamp by a few tenths of a dB.

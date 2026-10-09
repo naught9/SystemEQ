@@ -31,7 +31,7 @@ struct AutoEQView: View {
         }
         .padding(16)
         .frame(minWidth: 900, minHeight: 620)
-        .task(id: Inputs(sourceID: sourceID, targetID: targetID, options: options)) { await refit() }
+        .task(id: Inputs(sourceID: sourceID, targetID: targetID, options: fitOptions)) { await refit() }
         .alert("Couldn't save preset", isPresented: .constant(errorMessage != nil)) {
             Button("OK") { errorMessage = nil }
         } message: {
@@ -48,7 +48,12 @@ struct AutoEQView: View {
         Form {
             Section {
                 measurementPicker("Source", selection: $sourceID)
+                if let source { rigPicker(for: source) }
                 measurementPicker("Target", selection: $targetID)
+                if let target { rigPicker(for: target) }
+                if source != nil && target != nil {
+                    rigStatus
+                }
                 if model.library.measurements.isEmpty {
                     Text("Add a folder containing frequency response measurements (two columns: frequency and dB) from the menu bar.")
                         .font(.caption)
@@ -75,6 +80,41 @@ struct AutoEQView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Options for fitting, including the rigs of the chosen source and target.
+    private var fitOptions: AutoEQOptions {
+        var options = options
+        options.sourceRig = source.flatMap(model.library.rig(for:))
+        options.targetRig = target.flatMap(model.library.rig(for:))
+        return options
+    }
+
+    private func rigPicker(for measurement: PresetLibrary.Measurement) -> some View {
+        Picker("Measured on", selection: Binding(
+            get: { model.library.rig(for: measurement) },
+            set: { model.library.setRig($0, for: measurement) }
+        )) {
+            Text("Unknown").tag(MeasurementRig?.none)
+            ForEach(MeasurementRig.allCases, id: \.self) { Text($0.rawValue).tag(Optional($0)) }
+        }
+        .font(.caption)
+        .help("The rig this curve was measured on. Guessed from \"711\" or \"5128\" in the file or folder name.")
+    }
+
+    private var rigStatus: some View {
+        let sourceRig = fitOptions.sourceRig, targetRig = fitOptions.targetRig
+        let (message, icon, color): (String, String, Color) = switch (sourceRig, targetRig) {
+        case let (source?, target?) where source != target:
+            ("Target converted from \(target.rawValue) to \(source.rawValue)", "arrow.triangle.2.circlepath", .secondary)
+        case (_?, _?):
+            ("Source and target are from the same rig", "checkmark.circle", .secondary)
+        default:
+            ("Set both rigs so a target from a different rig can be converted", "exclamationmark.triangle", .orange)
+        }
+        return Label(message, systemImage: icon)
+            .font(.caption)
+            .foregroundStyle(color)
     }
 
     private func measurementPicker(_ title: String, selection: Binding<String?>) -> some View {
@@ -214,7 +254,7 @@ struct AutoEQView: View {
         isFitting = true
         defer { isFitting = false }
         let defaultName = "\(source.response.name) -> \(target.response.name)"
-        let options = options
+        let options = fitOptions
         let fitted = await Task.detached(priority: .userInitiated) {
             AutoEQ.fit(source: source.response, target: target.response, name: defaultName, options: options)
         }.value

@@ -39,11 +39,17 @@ final class PresetLibrary {
         .appending(path: "SystemEQ/Presets", directoryHint: .isDirectory)
 
     private static let foldersKey = "presetFolders"
+    private static let rigOverridesKey = "measurementRigs"
+
+    /// Rigs the user chose for measurements whose rig couldn't be inferred (or was inferred wrongly), by path.
+    private(set) var rigOverrides: [String: MeasurementRig] = [:]
 
     init() {
         folders = (UserDefaults.standard.stringArray(forKey: Self.foldersKey) ?? [])
             .map { URL(filePath: $0, directoryHint: .isDirectory) }
         try? FileManager.default.createDirectory(at: Self.importFolder, withIntermediateDirectories: true)
+        let saved = UserDefaults.standard.dictionary(forKey: Self.rigOverridesKey) as? [String: String] ?? [:]
+        rigOverrides = saved.compactMapValues(MeasurementRig.init(rawValue:))
         reload()
     }
 
@@ -58,6 +64,16 @@ final class PresetLibrary {
 
     static func importedPresetExists(named name: String) -> Bool {
         FileManager.default.fileExists(atPath: importFolder.appending(path: fileName(for: name)).path)
+    }
+
+    /// The measurement's rig: the user's choice if any, otherwise guessed from its folder and file name.
+    func rig(for measurement: Measurement) -> MeasurementRig? {
+        rigOverrides[measurement.id] ?? MeasurementRig.infer(from: measurement.group + "/" + measurement.url.lastPathComponent)
+    }
+
+    func setRig(_ rig: MeasurementRig?, for measurement: Measurement) {
+        rigOverrides[measurement.id] = rig
+        UserDefaults.standard.set(rigOverrides.mapValues(\.rawValue), forKey: Self.rigOverridesKey)
     }
 
     func addFolder(_ url: URL) {
