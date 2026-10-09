@@ -124,11 +124,11 @@ struct VisualizerView: View {
                     GeometryReader { geometry in
                         let scale = PlotScale(size: geometry.size, db: floorDB...0)
                         let _ = model.update(from: engine, now: timeline.date, columnCount: max(Int(geometry.size.width / 2), 2), scale: scale)
-                        SpectrumCanvas(model: model, scale: scale)
+                        SpectrumCanvas(model: model, scale: scale, frame: timeline.date)
                     }
                     .background(.black.opacity(0.85), in: RoundedRectangle(cornerRadius: 8))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
-                    LoudnessPanel(model: model)
+                    LoudnessPanel(model: model, frame: timeline.date)
                 }
             }
         }
@@ -170,6 +170,9 @@ struct VisualizerView: View {
 private struct SpectrumCanvas: View {
     let model: VisualizerModel
     let scale: PlotScale
+    /// The model is updated in place and isn't observable, so the frame time is what tells
+    /// SwiftUI this view changed and must redraw.
+    let frame: Date
 
     var body: some View {
         Canvas { context, size in
@@ -207,6 +210,8 @@ private struct SpectrumCanvas: View {
 
 private struct LoudnessPanel: View {
     let model: VisualizerModel
+    /// See `SpectrumCanvas.frame`.
+    let frame: Date
 
     var body: some View {
         HStack(alignment: .top, spacing: 24) {
