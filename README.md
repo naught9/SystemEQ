@@ -68,3 +68,7 @@ AutoEq is MIT licensed, copyright (c) 2018-2022 Jaakko Pasanen; the notice is in
 | `Tests/EQCoreTests` | Parser, DSP, metering and fitter tests. |
 
 iOS doesn't allow apps to process other apps' audio, so an iOS version could only EQ audio it plays itself, for example a built-in music player using `EQCore`.
+
+## License
+
+MIT, see [LICENSE](LICENSE). `Sources/EQCore/AutoEQ.swift` is a port of AutoEq, also MIT licensed (c) 2018-2022 Jaakko Pasanen.
