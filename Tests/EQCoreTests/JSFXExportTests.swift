@@ -36,4 +36,12 @@ struct JSFXExportTests {
         #expect(script.contains("preset(1, 1, -5.29);"))
         #expect(script.contains("band(1, 0, 0, 3000, 2, 1);"))
     }
+
+    @Test func isAlwaysOnWithoutItsOwnBypass() {
+        // Hosts bypass the whole effect, so the script has only the preset menu and preamp adjustment.
+        let script = JSFXExport.script(presets: [claude, harman], title: "Presets")
+        #expect(script.contains("slider2:0<-30,30,0.01>Preamp adjust (dB)"))
+        #expect(!script.contains("slider3"))
+        #expect(!script.contains("Bypassed"))
+    }
 }

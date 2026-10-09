@@ -31,7 +31,6 @@ public enum JSFXExport {
 
         slider1:0<0,\(presets.count - 1),1{\(presets.map { menuLabel($0.name) }.joined(separator: ","))}>\(selectorHidden)Preset
         slider2:0<-30,30,0.01>Preamp adjust (dB)
-        slider3:0<0,1,1{On,Bypassed}>EQ
 
         in_pin:left
         in_pin:right
@@ -126,22 +125,21 @@ public enum JSFXExport {
         gain = 10 ^ ((presetPreampDB + slider2) / 20);
 
         @sample
-        slider3 == 0 ? (
-          ch = 0;
-          loop(min(num_ch, maxChannels),
-            x = spl(ch) * gain;
-            i = 0;
-            loop(bandCount,
-              k = ch * maxBands + i;
-              y = cb0[i] * x + s1[k];
-              s1[k] = cb1[i] * x - ca1[i] * y + s2[k];
-              s2[k] = cb2[i] * x - ca2[i] * y;
-              x = y;
-              i += 1;
-            );
-            spl(ch) = x;
-            ch += 1;
+        // Always on: bypass the whole effect in the host to compare.
+        ch = 0;
+        loop(min(num_ch, maxChannels),
+          x = spl(ch) * gain;
+          i = 0;
+          loop(bandCount,
+            k = ch * maxBands + i;
+            y = cb0[i] * x + s1[k];
+            s1[k] = cb1[i] * x - ca1[i] * y + s2[k];
+            s2[k] = cb2[i] * x - ca2[i] * y;
+            x = y;
+            i += 1;
           );
+          spl(ch) = x;
+          ch += 1;
         );
 
         """
