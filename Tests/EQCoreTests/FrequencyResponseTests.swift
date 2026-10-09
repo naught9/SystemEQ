@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import EQCore
 
@@ -49,5 +50,18 @@ struct FrequencyResponseTests {
         #expect(abs(grid.first! - 20) < 1e-9)
         #expect(abs(grid.last! - 20_000) < 1e-6)
         #expect(grid.count == 479) // 9.97 octaves × 48 + 1
+    }
+
+    @Test func readsLatin1FilesFromREW() throws {
+        // REW writes ISO-8859-1; "°" here is the single byte 0xB0, which isn't valid UTF-8.
+        var bytes = Array("* Measurement data measured by REW, temp 21".utf8) + [0xB0] + Array("C\n* Freq(Hz) SPL(dB)\n".utf8)
+        for i in 0..<12 { bytes += Array("\(20 + i * 10) \(90 + i)\n".utf8) }
+        let url = FileManager.default.temporaryDirectory.appending(path: "latin1-\(UUID().uuidString).txt")
+        try Data(bytes).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let response = try FrequencyResponse.parse(contentsOf: url)
+        #expect(response.frequencies.count == 12)
+        #expect(response.db.last == 101)
     }
 }

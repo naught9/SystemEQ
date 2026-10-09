@@ -46,7 +46,7 @@ public struct FrequencyResponse: Sendable, Equatable {
     }
 
     public static func parse(contentsOf url: URL) throws -> FrequencyResponse {
-        let text = try String(contentsOf: url, encoding: .utf8)
+        let text = try TextFile.read(url)
         let name = url.deletingPathExtension().lastPathComponent.removingPercentEncoding
             ?? url.deletingPathExtension().lastPathComponent
         return try parse(text, name: name)

@@ -50,7 +50,7 @@ public enum PresetParser {
     }
 
     public static func parse(contentsOf url: URL) throws -> ParametricPreset {
-        let text = try String(contentsOf: url, encoding: .utf8)
+        let text = try TextFile.read(url)
         return try parse(text, name: url.deletingPathExtension().lastPathComponent)
     }
 
