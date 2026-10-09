@@ -109,3 +109,25 @@ public enum PresetParser {
             .first
     }
 }
+
+extension ParametricPreset {
+    /// The preset in Equalizer APO / AutoEQ text format, readable by `PresetParser`.
+    public var equalizerAPOText: String {
+        var lines = [String(format: "Preamp: %.2f dB", preampDB)]
+        for (index, filter) in filters.enumerated() {
+            let code = switch filter.type {
+            case .peaking: "PK"
+            case .lowShelf: "LS"
+            case .highShelf: "HS"
+            case .lowPass: "LPQ"
+            case .highPass: "HPQ"
+            case .notch: "NO"
+            }
+            var line = String(format: "Filter %d: %@ %@ Fc %.1f Hz", index + 1, filter.isEnabled ? "ON" : "OFF", code, filter.frequency)
+            if filter.type.usesGain { line += String(format: " Gain %.1f dB", filter.gainDB) }
+            line += String(format: " Q %.2f", filter.q)
+            lines.append(line)
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+}

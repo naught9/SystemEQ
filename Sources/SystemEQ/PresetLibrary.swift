@@ -38,6 +38,15 @@ final class PresetLibrary {
         entries.first { $0.id == path }
     }
 
+    /// File name for a preset called `name`, with characters that aren't allowed in file names replaced.
+    static func fileName(for name: String) -> String {
+        name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-") + ".txt"
+    }
+
+    static func importedPresetExists(named name: String) -> Bool {
+        FileManager.default.fileExists(atPath: importFolder.appending(path: fileName(for: name)).path)
+    }
+
     func addFolder(_ url: URL) {
         guard !folders.contains(url) else { return }
         folders.append(url)

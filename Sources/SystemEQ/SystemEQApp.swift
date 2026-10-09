@@ -11,5 +11,14 @@ struct SystemEQApp: App {
             Image(systemName: model.isEnabled ? "slider.vertical.3" : "slider.horizontal.below.rectangle")
         }
         .menuBarExtraStyle(.window)
+
+        Window("Equalizer", id: WindowID.editor) {
+            EditorView(model: model)
+        }
+        .defaultSize(width: 900, height: 700)
     }
+}
+
+enum WindowID {
+    static let editor = "editor"
 }

@@ -6,11 +6,12 @@ struct MenuContentView: View {
     @Bindable var model: AppModel
     @State private var search = ""
     @State private var importMessage: String?
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
-            ResponseCurveView(preset: model.selectedEntry?.preset ?? .flat)
+            ResponseCurveView(preset: model.preset)
                 .frame(height: 110)
             presetSummary
             Divider()
@@ -52,14 +53,17 @@ struct MenuContentView: View {
 
     private var presetSummary: some View {
         HStack {
-            Text(model.selectedEntry?.preset.name ?? "No preset (flat)")
+            Text(model.preset.name)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Spacer()
-            if let preset = model.selectedEntry?.preset {
-                Text("\(preset.filters.count(where: \.isEnabled)) filters · preamp \(preset.preampDB, specifier: "%.1f") dB")
-                    .foregroundStyle(.secondary)
+            if model.isEdited {
+                Text("edited").foregroundStyle(.orange)
             }
+            Spacer()
+            Text("\(model.preset.filters.count(where: \.isEnabled)) bands · preamp \(model.preset.preampDB, specifier: "%.1f") dB")
+                .foregroundStyle(.secondary)
+            Button("Edit…") { open(WindowID.editor) }
+                .controlSize(.small)
         }
         .font(.caption)
     }
@@ -81,14 +85,14 @@ struct MenuContentView: View {
                         .foregroundStyle(.secondary)
                         .padding(.vertical, 8)
                 }
-                presetRow(name: "Flat (no EQ)", path: nil)
+                presetRow(name: "Flat (no EQ)", entry: nil)
                 ForEach(groups.keys.sorted(), id: \.self) { group in
                     Text(group)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .padding(.top, 6)
                     ForEach(groups[group] ?? []) { entry in
-                        presetRow(name: entry.preset.name, path: entry.id)
+                        presetRow(name: entry.preset.name, entry: entry)
                     }
                 }
             }
@@ -96,13 +100,14 @@ struct MenuContentView: View {
         .frame(height: 240)
     }
 
-    private func presetRow(name: String, path: String?) -> some View {
-        Button {
-            model.selectedPresetPath = path
+    private func presetRow(name: String, entry: PresetLibrary.Entry?) -> some View {
+        let isCurrent = !model.isEdited && model.loadedPresetPath == entry?.id
+        return Button {
+            model.load(entry)
         } label: {
             HStack {
                 Image(systemName: "checkmark")
-                    .opacity(model.selectedPresetPath == path ? 1 : 0)
+                    .opacity(isCurrent ? 1 : 0)
                 Text(name).lineLimit(1).truncationMode(.middle)
                 Spacer()
             }
@@ -147,6 +152,11 @@ struct MenuContentView: View {
     }
 
     // MARK: Actions
+
+    private func open(_ window: String) {
+        openWindow(id: window)
+        NSApp.activate()
+    }
 
     private func addFolder() {
         guard let urls = runOpenPanel(directories: true) else { return }
