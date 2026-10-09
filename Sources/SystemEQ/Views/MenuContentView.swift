@@ -143,6 +143,7 @@ struct MenuContentView: View {
                     }
                     if !model.library.folders.isEmpty { Divider() }
                     Button("Show Imported Presets") { NSWorkspace.shared.open(PresetLibrary.importFolder) }
+                    Button("Export Presets as JSFX…", action: exportJSFX)
                     Button("Reload") { model.reloadLibrary() }
                 }
                 .fixedSize()
@@ -174,6 +175,40 @@ struct MenuContentView: View {
         let failures = model.library.importFiles(urls)
         importMessage = failures.isEmpty ? nil : "Skipped \(failures.map(\.0.lastPathComponent).joined(separator: ", ")): not a parametric EQ preset"
         model.reloadLibrary()
+    }
+
+    /// Combines chosen presets into one JSFX with a preset selector, for REAPER or EffectDeck on iOS.
+    private func exportJSFX() {
+        let open = NSOpenPanel()
+        open.message = "Choose the presets to include. The JSFX gets a menu to switch between them."
+        open.prompt = "Choose"
+        open.directoryURL = PresetLibrary.importFolder
+        open.allowsMultipleSelection = true
+        open.allowedContentTypes = [.plainText]
+        NSApp.activate()
+        guard open.runModal() == .OK else { return }
+
+        var presets: [ParametricPreset] = []
+        var skipped: [String] = []
+        for url in open.urls.sorted(by: { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }) {
+            if let preset = try? PresetParser.parse(contentsOf: url) { presets.append(preset) } else { skipped.append(url.lastPathComponent) }
+        }
+        guard !presets.isEmpty else {
+            importMessage = "None of those files are parametric EQ presets"
+            return
+        }
+
+        let save = NSSavePanel()
+        save.nameFieldStringValue = "SystemEQ Presets.jsfx"
+        save.message = "Re-exporting with the same name replaces the effect in EffectDeck, keeping your chains."
+        guard save.runModal() == .OK, let url = save.url else { return }
+        let title = url.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "SystemEQ ", with: "")
+        do {
+            try JSFXExport.script(presets: presets, title: title).write(to: url, atomically: true, encoding: .utf8)
+            importMessage = skipped.isEmpty ? nil : "Exported \(presets.count) presets; skipped \(skipped.joined(separator: ", "))"
+        } catch {
+            importMessage = error.localizedDescription
+        }
     }
 
     private func runOpenPanel(directories: Bool) -> [URL]? {

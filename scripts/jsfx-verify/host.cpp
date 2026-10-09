@@ -1,13 +1,15 @@
 // Runs a JSFX on deterministic test audio and writes the output as raw doubles.
-// Usage: host <script.jsfx> <sample rate> <frames> <output.bin>
+// Usage: host <script.jsfx> <sample rate> <frames> <output.bin> [preset index] [--list]
+// With --list, prints the preset selector's entries as the engine parsed them.
 #include "ysfx.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <vector>
 
 int main(int argc, char **argv) {
-    if (argc != 5) { std::fprintf(stderr, "usage: host script rate frames out\n"); return 2; }
+    if (argc < 5) { std::fprintf(stderr, "usage: host script rate frames out [preset] [--list]\n"); return 2; }
     const double rate = std::atof(argv[2]);
     const uint32_t frames = (uint32_t)std::atoi(argv[3]);
 
@@ -18,6 +20,12 @@ int main(int argc, char **argv) {
     ysfx_set_sample_rate(fx, rate);
     ysfx_set_block_size(fx, 512);
     ysfx_init(fx);
+    if (argc > 5) ysfx_slider_set_value(fx, 0, std::atof(argv[5]), true);
+    if (argc > 6 && std::string(argv[6]) == "--list") {
+        uint32_t count = ysfx_slider_get_enum_size(fx, 0);
+        std::printf("%s: %u entries\n", ysfx_slider_get_name(fx, 0), count);
+        for (uint32_t i = 0; i < count; ++i) std::printf("  %u: %s\n", i, ysfx_slider_get_enum_name(fx, 0, i));
+    }
 
     // Same generator as the Swift side: an impulse, then xorshift noise in [-0.5, 0.5), in float precision.
     std::vector<double> left(frames), right(frames);
