@@ -35,9 +35,7 @@ From the menu bar you can also open:
 
 - **Equalizer**: edit the current preset with up to 20 parametric bands. Drag points on the curve (hold ⌥ to change Q) or type values. Editing a library preset turns it into a new unsaved preset; **Save as Preset…** adds it to the library and **Export…** writes an Equalizer APO / AutoEQ `.txt` file.
 - **Visualizer**: post-EQ spectrum (4k–32k point FFT with peak hold and optional tilt) and BS.1770 / EBU R 128 loudness (momentary, short-term, integrated LUFS) with sample peak meters.
-- **AutoEQ**: generate a preset that makes a measured headphone (source) sound like another headphone or a target curve, AutoEQ style: curves aligned at 1 kHz, 1/12-octave smoothing widening above 6 kHz, boosts capped (default +6 dB), then a 105 Hz low shelf, peaking filters and a 10 kHz high shelf fitted by least squares. Bass boost, treble and tilt adjust the target like autoeq.app's sliders. Measurements are two-column text files (frequency, dB) as exported by squig.link or AutoEQ.
-
-The fitter follows AutoEQ's approach but isn't a port of it, so results can differ from autoeq.app's for the same files, mostly in the treble.
+- **AutoEQ**: generate a preset that makes a measured headphone (source) sound like another headphone or a target curve. This is a Swift port of [AutoEq](https://github.com/jaakkopasanen/AutoEq)'s pipeline with autoeq.app's defaults (8 peaking filters with 105 Hz / 10 kHz shelves, +12 dB max boost, 18 dB/oct slope limit, 0.08 / 2 octave smoothing, mean-error normalisation). Bass boost, treble and tilt adjust the target like autoeq.app's sliders. Measurements are two-column text files (frequency, dB) as exported by squig.link or AutoEQ.
 
 SystemEQ follows your default output device, so switching outputs or plugging in headphones moves the EQ to the new device. The preset's preamp is applied as well, so audio will sound quieter with EQ on, which prevents clipping.
 
@@ -46,6 +44,19 @@ SystemEQ follows your default output device, so switching outputs or plugging in
 - A **global process tap** captures every app's audio except SystemEQ's own, and mutes the original.
 - A **private aggregate device** built on the current output device receives the tap. Its audio callback runs the EQ and writes to the device.
 - If SystemEQ quits or crashes, macOS removes the tap and audio plays directly again.
+
+## AutoEq port
+
+`Sources/EQCore/AutoEQ.swift` ports AutoEq's `process` (interpolation, centring, compensation, Savitzky-Golay smoothing, slope limiting) and `optimize_parametric_eq` (filter initialisation, loss with sharpness penalty). The equalization curve matches the original exactly. SciPy's SLSQP optimizer is replaced by Levenberg-Marquardt on the same loss, run to convergence instead of autoeq.app's 0.5 s limit, so filters typically differ from autoeq.app's by under 0.15 dB RMS and the preamp by a few tenths of a dB.
+
+`Tests/EQCoreTests/AutoEQTests.swift` checks this against output from the original Python code stored in `Tests/EQCoreTests/Fixtures`. To regenerate it, install AutoEq's dependencies (numpy, scipy, matplotlib, tabulate, pillow) in a virtual environment and run:
+
+```sh
+python scripts/autoeq-reference/make_fixture.py Tests/EQCoreTests/Fixtures
+python scripts/autoeq-reference/run.py <AutoEq checkout> Tests/EQCoreTests/Fixtures/source.csv Tests/EQCoreTests/Fixtures/target.csv none > Tests/EQCoreTests/Fixtures/autoeq-reference.json
+```
+
+AutoEq is MIT licensed, copyright (c) 2018-2022 Jaakko Pasanen; the notice is included in `AutoEQ.swift`.
 
 ## Layout
 

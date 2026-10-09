@@ -13,6 +13,11 @@ let package = Package(
         .target(name: "EQCore"),
         // macOS menu bar app that applies the EQ to all system audio.
         .executableTarget(name: "SystemEQ", dependencies: ["EQCore"]),
-        .testTarget(name: "EQCoreTests", dependencies: ["EQCore"]),
+        .testTarget(
+            name: "EQCoreTests",
+            dependencies: ["EQCore"],
+            // Synthetic curves and the output of the original Python AutoEq for them.
+            resources: [.copy("Fixtures")]
+        ),
     ]
 )
