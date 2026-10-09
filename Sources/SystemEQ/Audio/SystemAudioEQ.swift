@@ -21,6 +21,9 @@ final class SystemAudioEQ {
 
     private(set) var state = State.stopped
     let processor = EQProcessor()
+    /// Post-EQ audio for the visualizers.
+    let meterBuffer = AudioRingBuffer()
+    private(set) var sampleRate = 48_000.0
 
     private var tapID = AudioObjectID.unknown
     private var aggregateID = AudioObjectID.unknown
@@ -89,11 +92,12 @@ final class SystemAudioEQ {
 
         let sampleRate = try aggregateID.read(kAudioDevicePropertyNominalSampleRate, default: Float64(48_000))
         processor.setSampleRate(sampleRate)
+        self.sampleRate = sampleRate
         processor.reset()
         watchAggregate()
 
         try check(
-            AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, nil, Self.makeRenderBlock(processor: processor, tapChannels: tapChannels)),
+            AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, nil, Self.makeRenderBlock(processor: processor, meter: meterBuffer, tapChannels: tapChannels)),
             "Creating the audio callback"
         )
         try check(AudioDeviceStart(aggregateID, ioProcID), "Starting audio")
@@ -161,6 +165,7 @@ final class SystemAudioEQ {
                 guard let self, let rate = try? device.read(kAudioDevicePropertyNominalSampleRate, default: Float64(0)) else { return }
                 log.info("Sample rate changed to \(rate, privacy: .public) Hz")
                 self.processor.setSampleRate(rate)
+                self.sampleRate = rate
             }
         }
         let overloadListener: AudioObjectPropertyListenerBlock = { _, _ in
@@ -180,24 +185,26 @@ final class SystemAudioEQ {
     // MARK: Rendering
 
     /// Built outside the main actor so the block carries no actor isolation: it runs on the audio thread.
-    private nonisolated static func makeRenderBlock(processor: EQProcessor, tapChannels: Int) -> AudioDeviceIOBlock {
+    private nonisolated static func makeRenderBlock(processor: EQProcessor, meter: AudioRingBuffer, tapChannels: Int) -> AudioDeviceIOBlock {
         { _, input, _, output, _ in
             render(
                 input: UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input)),
                 output: UnsafeMutableAudioBufferListPointer(output),
                 tapChannels: tapChannels,
-                processor: processor
+                processor: processor,
+                meter: meter
             )
         }
     }
 
-    /// Copies the tap's audio to the output device's first channels and applies the EQ.
+    /// Copies the tap's audio to the output device's first channels, applies the EQ, and copies the result for metering.
     /// Real-time safe: no allocation, locking or Objective-C messaging.
     nonisolated static func render(
         input: UnsafeMutableAudioBufferListPointer,
         output: UnsafeMutableAudioBufferListPointer,
         tapChannels: Int,
-        processor: EQProcessor
+        processor: EQProcessor,
+        meter: AudioRingBuffer
     ) {
         for buffer in output {
             if let data = buffer.mData { memset(data, 0, Int(buffer.mDataByteSize)) }
@@ -218,6 +225,12 @@ final class SystemAudioEQ {
                 destination.samples[frame * destination.stride] = source.samples[frame * source.stride]
             }
             processor.process(destination.samples, frames: frames, stride: destination.stride, channel: channel)
+        }
+
+        // Mono outputs meter the same channel on both sides.
+        if let left = ChannelView(output, channel: 0) {
+            let right = ChannelView(output, channel: min(1, outputChannels - 1)) ?? left
+            meter.write(left: left.samples, leftStride: left.stride, right: right.samples, rightStride: right.stride, frames: min(left.frames, right.frames))
         }
     }
 }

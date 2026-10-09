@@ -127,6 +127,10 @@ struct MenuContentView: View {
                     .foregroundStyle(.secondary)
             }
             HStack {
+                Button("Equalizer…") { open(WindowID.editor) }
+                Button("Visualizer…") { open(WindowID.visualizer) }
+            }
+            HStack {
                 Button("Add Folder…", action: addFolder)
                 Button("Import…", action: importFiles)
                 Menu("Folders") {

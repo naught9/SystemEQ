@@ -16,9 +16,15 @@ struct SystemEQApp: App {
             EditorView(model: model)
         }
         .defaultSize(width: 900, height: 700)
+
+        Window("Visualizer", id: WindowID.visualizer) {
+            VisualizerView(engine: model.engine)
+        }
+        .defaultSize(width: 900, height: 600)
     }
 }
 
 enum WindowID {
     static let editor = "editor"
+    static let visualizer = "visualizer"
 }
