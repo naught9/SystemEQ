@@ -9,7 +9,7 @@ To regenerate:
 
 ```sh
 scripts/rig-conversion/download.sh /tmp/rig-data
-swiftc -O Sources/EQCore/*.swift scripts/rig-conversion/compute.swift -o /tmp/rig-compute
+swiftc -O Sources/EQCore/*.swift scripts/rig-conversion/main.swift -o /tmp/rig-compute
 /tmp/rig-compute /tmp/rig-data   # prints the curve and spread, writes "IEC 711 to B&K 5128.csv" and used.txt
 ```
 
