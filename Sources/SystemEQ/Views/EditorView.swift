@@ -43,6 +43,8 @@ struct EditorView: View {
             Button("Reset to Flat") { model.edit { $0.preampDB = 0; $0.filters = [] } }
             Button("Save as Preset…", action: saveToLibrary)
             Button("Export…", action: export)
+            Button("Export JSFX…", action: exportJSFX)
+                .help("Save as a JSFX effect for REAPER or EffectDeck on iOS that sounds identical to SystemEQ")
         }
     }
 
@@ -153,13 +155,21 @@ struct EditorView: View {
     }
 
     private func export() {
+        save(fileName: PresetLibrary.fileName(for: model.preset.name), text: model.preset.equalizerAPOText)
+    }
+
+    private func exportJSFX() {
+        let name = PresetLibrary.fileName(for: model.preset.name).replacingOccurrences(of: ".txt", with: ".jsfx")
+        save(fileName: name, text: model.preset.jsfxScript)
+    }
+
+    private func save(fileName: String, text: String) {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = PresetLibrary.fileName(for: model.preset.name)
-        panel.allowedContentTypes = [.plainText]
+        panel.nameFieldStringValue = fileName
         NSApp.activate()
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            try model.export(to: url)
+            try text.write(to: url, atomically: true, encoding: .utf8)
         } catch {
             errorMessage = error.localizedDescription
         }
