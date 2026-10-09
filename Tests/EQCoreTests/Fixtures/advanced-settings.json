@@ -1,0 +1,1 @@
+{"bass_boost_gain": 4.5, "bass_boost_fc": 150, "bass_boost_q": 0.5, "treble_boost_gain": -3, "treble_boost_fc": 6000, "treble_boost_q": 0.6, "tilt": -0.4, "max_gain": 8, "max_slope": 12, "window_size": 0.2, "treble_window_size": 1.0, "treble_f_lower": 4000, "treble_f_upper": 9000, "treble_gain_k": 0.6, "min_f": 30, "max_f": 16000}

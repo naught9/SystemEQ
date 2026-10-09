@@ -13,6 +13,15 @@ struct AutoEQView: View {
     @State private var isFitting = false
     @State private var name = ""
     @State private var errorMessage: String?
+    @AppStorage("autoEQShowAdvanced") private var showAdvanced = false
+    @AppStorage("autoEQSmoothed") private var showSmoothed = true
+    @AppStorage("autoEQCurves") private var storedCurves = AutoEQCurve.defaultSelection
+    @AppStorage("autoEQOptions") private var storedOptions = Data()
+
+    private var visibleCurves: Set<AutoEQCurve> {
+        get { AutoEQCurve.decode(storedCurves) }
+        nonmutating set { storedCurves = AutoEQCurve.encode(newValue) }
+    }
 
     private struct Inputs: Equatable {
         var sourceID: String?
@@ -22,7 +31,7 @@ struct AutoEQView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
-            settings.frame(width: 280)
+            settings.frame(width: 300)
             Divider()
             VStack(alignment: .leading, spacing: 12) {
                 plot
@@ -30,8 +39,14 @@ struct AutoEQView: View {
             }
         }
         .padding(16)
-        .frame(minWidth: 900, minHeight: 620)
+        .frame(minWidth: 960, minHeight: 680)
         .task(id: Inputs(sourceID: sourceID, targetID: targetID, options: fitOptions)) { await refit() }
+        .onAppear {
+            if let saved = try? JSONDecoder().decode(AutoEQOptions.self, from: storedOptions) { options = saved }
+        }
+        .onChange(of: options) {
+            storedOptions = (try? JSONEncoder().encode(options)) ?? Data()
+        }
         .alert("Couldn't save preset", isPresented: .constant(errorMessage != nil)) {
             Button("OK") { errorMessage = nil }
         } message: {
@@ -63,14 +78,15 @@ struct AutoEQView: View {
                 Text("Make the source sound like the target")
             }
 
-            Section("Target adjustments") {
-                slider("Bass boost", value: $options.bassBoostDB, range: -10...10, unit: "dB")
-                slider("Treble", value: $options.trebleDB, range: -10...10, unit: "dB")
-                slider("Tilt", value: $options.tiltDBPerOctave, range: -2...2, step: 0.1, unit: "dB/oct")
+            Section("Target") {
+                slider("Bass boost", $options.bassBoostDB, 0...20, step: 0.5, format: "%+.1f dB")
+                slider("Treble boost", $options.trebleDB, -15...15, step: 0.5, format: "%+.1f dB")
+                slider("Tilt", $options.tiltDBPerOctave, -1.5...1.5, step: 0.1, format: "%+.1f dB/oct")
+                slider("Max gain", $options.maxBoostDB, 0...36, step: 1, format: "%.0f dB",
+                       help: "Largest boost the EQ may apply")
             }
 
             Section("Filters") {
-                slider("Max boost", value: $options.maxBoostDB, range: 0...12, unit: "dB")
                 Stepper(value: $options.peakingFilterCount, in: 1...(AppModel.maxBands - 2)) {
                     Text("Peaking filters: \(options.peakingFilterCount)")
                 }
@@ -78,8 +94,37 @@ struct AutoEQView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Section {
+                DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
+                    advancedSettings
+                }
+            }
         }
         .formStyle(.grouped)
+    }
+
+    @ViewBuilder
+    private var advancedSettings: some View {
+        slider("Bass frequency", $options.bassBoostFrequency, 40...200, step: 5, format: "%.0f Hz")
+        slider("Bass Q", $options.bassBoostQ, 0.3...0.8, step: 0.05, format: "%.2f")
+        slider("Treble frequency", $options.trebleBoostFrequency, 1_000...20_000, step: 500, format: "%.0f Hz")
+        slider("Treble Q", $options.trebleBoostQ, 0.3...0.8, step: 0.05, format: "%.2f")
+        slider("Max slope", $options.maxSlopeDBPerOctave, 6...36, step: 3, format: "%.0f dB/oct",
+               help: "Steepest slope the correction curve may have")
+        slider("Smoothing", $options.windowSize, 0...1, step: 0.01, format: "%.2f oct",
+               help: "Smoothing for the smoothed source and error curves. As in AutoEq, the correction always uses 1/12 octave.")
+        slider("Treble smoothing", $options.trebleWindowSize, 0...3, step: 0.1, format: "%.1f oct",
+               help: "Smoothing above the transition region for the smoothed curves. As in AutoEq, the correction always uses 2 octaves.")
+        slider("Treble gain multiplier", $options.trebleGainK, 0...1, step: 0.05, format: "%.2f",
+               help: "Scales the correction above the transition region; 1 applies it fully")
+        rangeSliders("Transition region", $options.trebleFrequencies, 1_000...20_000, step: 100, gap: 100,
+                     help: "Where treble smoothing and the treble gain multiplier take over")
+        rangeSliders("Optimizer range", $options.optimizerFrequencyRange, 20...20_000, step: 10, gap: 500,
+                     help: "Frequencies the filters are fitted over")
+        Button("Reset to autoeq.app defaults") {
+            options = AutoEQOptions()
+        }
     }
 
     /// Options for fitting, including the rigs of the chosen source and target.
@@ -131,72 +176,82 @@ struct AutoEQView: View {
         }
     }
 
-    private func slider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, step: Double = 0.5, unit: String) -> some View {
+    private func slider(
+        _ title: String, _ value: Binding<Double>, _ range: ClosedRange<Double>,
+        step: Double, format: String, help: String? = nil
+    ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(title)
                 Spacer()
-                Text(String(format: "%+.1f %@", value.wrappedValue, unit))
+                Text(String(format: format, value.wrappedValue))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
             Slider(value: value, in: range, step: step)
         }
+        .help(help ?? "")
+    }
+
+    /// Two sliders editing the bounds of a frequency range, kept at least `gap` apart.
+    private func rangeSliders(
+        _ title: String, _ range: Binding<ClosedRange<Double>>, _ limits: ClosedRange<Double>,
+        step: Double, gap: Double, help: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(String(format: "%.0f–%.0f Hz", range.wrappedValue.lowerBound, range.wrappedValue.upperBound))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            Slider(value: Binding(
+                get: { range.wrappedValue.lowerBound },
+                set: { range.wrappedValue = min($0, range.wrappedValue.upperBound - gap)...range.wrappedValue.upperBound }
+            ), in: limits, step: step)
+            Slider(value: Binding(
+                get: { range.wrappedValue.upperBound },
+                set: { range.wrappedValue = range.wrappedValue.lowerBound...max($0, range.wrappedValue.lowerBound + gap) }
+            ), in: limits, step: step)
+        }
+        .help(help)
     }
 
     // MARK: Results
 
     private var plot: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Canvas { context, size in
-                let scale = PlotScale(size: size, db: -20...20)
-                scale.drawGrid(in: context, dbStep: 5)
-                guard let result else { return }
-
-                func path(_ values: [Double]) -> Path {
-                    var path = Path()
-                    for (index, frequency) in result.frequencies.enumerated() {
-                        let point = scale.point(frequency, values[index])
-                        index == 0 ? path.move(to: point) : path.addLine(to: point)
+            AutoEQPlot(result: result, curves: visibleCurves, smoothed: showSmoothed)
+                .overlay {
+                    if isFitting { ProgressView().controlSize(.small).padding(8) }
+                }
+                .overlay {
+                    if result == nil && !isFitting {
+                        Text("Choose a source and a target").foregroundStyle(.secondary)
                     }
-                    return path
                 }
-                context.stroke(path(result.source), with: .color(.secondary), lineWidth: 1.2)
-                context.stroke(path(result.target), with: .color(.green), style: StrokeStyle(lineWidth: 1.2, dash: [5, 3]))
-                context.stroke(path(result.equalizedSource), with: .color(.blue), lineWidth: 1.5)
-                context.stroke(path(result.equalization), with: .color(.orange.opacity(0.7)), lineWidth: 1)
-                context.stroke(path(result.fitted), with: .color(.accentColor), lineWidth: 2)
-            }
-            .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
-            .overlay {
-                if isFitting { ProgressView().controlSize(.small).padding(8) }
-            }
-            .overlay {
-                if result == nil && !isFitting {
-                    Text("Choose a source and a target").foregroundStyle(.secondary)
-                }
-            }
 
-            HStack(spacing: 14) {
-                legend("Source", .secondary)
-                legend("Target", .green, dashed: true)
-                legend("Source with EQ", .blue)
-                legend("Correction needed", .orange)
-                legend("Fitted EQ", .accentColor)
+            HStack(spacing: 12) {
+                ForEach(AutoEQCurve.allCases, id: \.self) { curve in
+                    Toggle(isOn: Binding(
+                        get: { visibleCurves.contains(curve) },
+                        set: { isOn in
+                            if isOn { visibleCurves.insert(curve) } else { visibleCurves.remove(curve) }
+                        }
+                    )) {
+                        Text(curve.title).foregroundStyle(curve.color)
+                    }
+                    .toggleStyle(.checkbox)
+                    .help(curve.help)
+                }
+                Spacer()
+                Toggle("Smoothed", isOn: $showSmoothed)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .help("Show the source, error and equalized curves smoothed")
             }
             .font(.caption)
-        }
-    }
-
-    private func legend(_ title: String, _ color: Color, dashed: Bool = false) -> some View {
-        HStack(spacing: 4) {
-            Path { path in
-                path.move(to: CGPoint(x: 0, y: 4))
-                path.addLine(to: CGPoint(x: 16, y: 4))
-            }
-            .stroke(color, style: StrokeStyle(lineWidth: 2, dash: dashed ? [4, 2] : []))
-            .frame(width: 16, height: 8)
-            Text(title).foregroundStyle(.secondary)
         }
     }
 

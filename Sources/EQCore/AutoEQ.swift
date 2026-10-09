@@ -31,20 +31,26 @@
 import Foundation
 
 /// Settings for `AutoEQ.fit`. Defaults match autoeq.app with the "8 peaking with shelves" configuration.
-public struct AutoEQOptions: Sendable, Equatable {
-    /// Low shelf added to the target at 105 Hz, Q 0.7.
+public struct AutoEQOptions: Sendable, Equatable, Codable {
+    /// Low shelf added to the target.
     public var bassBoostDB = 0.0
-    /// High shelf added to the target at 10 kHz, Q 0.7.
+    public var bassBoostFrequency = 105.0
+    public var bassBoostQ = 0.7
+    /// High shelf added to the target.
     public var trebleDB = 0.0
+    public var trebleBoostFrequency = 10_000.0
+    public var trebleBoostQ = 0.7
     /// Slope added to the target, pivoting at 632 Hz (the log-centre of 20 Hz–20 kHz).
     public var tiltDBPerOctave = 0.0
     /// Largest boost the equalization may apply.
     public var maxBoostDB = 12.0
     /// Steepest slope the equalization curve may have, in dB per octave.
     public var maxSlopeDBPerOctave = 18.0
-    /// Smoothing window below `trebleFrequencies`, in octaves.
+    /// Smoothing window below `trebleFrequencies`, in octaves, for the smoothed source and error curves.
+    /// As in AutoEq, this doesn't affect the equalization, which always uses 1/12 octave.
     public var windowSize = 0.08
-    /// Smoothing window above `trebleFrequencies`, in octaves.
+    /// Smoothing window above `trebleFrequencies`, in octaves, for the smoothed source and error curves.
+    /// As in AutoEq, this doesn't affect the equalization, which always uses 2 octaves.
     public var trebleWindowSize = 2.0
     /// Region where smoothing (and treble gain scaling) cross over from normal to treble.
     public var trebleFrequencies = 6_000.0...8_000.0
@@ -54,6 +60,8 @@ public struct AutoEQOptions: Sendable, Equatable {
     /// autoeq.app always does this.
     public var minimizeMeanError = true
     public var peakingFilterCount = 8
+    /// Frequencies the filter optimizer tries to match.
+    public var optimizerFrequencyRange = 20.0...20_000.0
     public var sampleRate = 48_000.0
     /// Rigs the source and target were measured on. When both are known and differ, the target is
     /// converted to the source's rig before equalizing. (Not part of AutoEq.)
@@ -68,6 +76,11 @@ public struct AutoEQResult: Sendable {
     public let frequencies: [Double]
     /// Source, centred at 1 kHz.
     public let source: [Double]
+    /// Source smoothed with the options' smoothing windows.
+    public let sourceSmoothed: [Double]
+    /// Source minus target: positive where the source is too loud.
+    public let error: [Double]
+    public let errorSmoothed: [Double]
     /// Target including adjustments, offset the way AutoEq compares it with the source.
     public let target: [Double]
     /// The correction the filters aim for.
@@ -78,6 +91,7 @@ public struct AutoEQResult: Sendable {
     public let rmsErrorDB: Double
     /// Predicted result: source with the fitted EQ applied.
     public var equalizedSource: [Double] { zip(source, fitted).map(+) }
+    public var equalizedSourceSmoothed: [Double] { zip(sourceSmoothed, fitted).map(+) }
 }
 
 public enum AutoEQ {
@@ -119,7 +133,10 @@ public enum AutoEQ {
         // FrequencyResponse.optimize_parametric_eq with 8_PEAKING_WITH_SHELVES.
         let optimizationGrid = frequencies(step: optimizationStep)
         let optimizationTarget = interpolate(x: grid, y: equalization, at: optimizationGrid)
-        var peq = PEQ(frequencies: optimizationGrid, sampleRate: options.sampleRate, target: optimizationTarget, peakingCount: options.peakingFilterCount)
+        var peq = PEQ(
+            frequencies: optimizationGrid, sampleRate: options.sampleRate, target: optimizationTarget,
+            peakingCount: options.peakingFilterCount, fitRange: options.optimizerFrequencyRange
+        )
         peq.optimize()
 
         let filters = peq.sortedFilters.map { band -> Filter in
@@ -138,8 +155,12 @@ public enum AutoEQ {
         let fitRange = grid.indices.filter { grid[$0] <= 10_000 }
         let rms = sqrt(fitRange.map { pow(fitted[$0] - equalization[$0], 2) }.reduce(0, +) / Double(fitRange.count))
 
+        let smooth = { (values: [Double]) in
+            smoothen(values, grid: grid, windowSize: options.windowSize, trebleWindowSize: options.trebleWindowSize, treble: options.trebleFrequencies)
+        }
         return AutoEQResult(
-            preset: preset, frequencies: grid, source: raw, target: targetRaw,
+            preset: preset, frequencies: grid, source: raw, sourceSmoothed: smooth(raw),
+            error: error, errorSmoothed: smooth(error), target: targetRaw,
             equalization: equalization, fitted: fitted, rmsErrorDB: rms
         )
     }
@@ -205,8 +226,8 @@ public enum AutoEQ {
 
     /// `create_target`: bass boost, treble boost and tilt added to the target.
     static func targetAdjustments(_ grid: [Double], options: AutoEQOptions) -> [Double] {
-        let bass = BiquadCoefficients(filter: Filter(type: .lowShelf, frequency: 105, gainDB: options.bassBoostDB, q: 0.7), sampleRate: options.sampleRate)
-        let treble = BiquadCoefficients(filter: Filter(type: .highShelf, frequency: 10_000, gainDB: options.trebleDB, q: 0.7), sampleRate: options.sampleRate)
+        let bass = BiquadCoefficients(filter: Filter(type: .lowShelf, frequency: options.bassBoostFrequency, gainDB: options.bassBoostDB, q: options.bassBoostQ), sampleRate: options.sampleRate)
+        let treble = BiquadCoefficients(filter: Filter(type: .highShelf, frequency: options.trebleBoostFrequency, gainDB: options.trebleDB, q: options.trebleBoostQ), sampleRate: options.sampleRate)
         return grid.map {
             bass.magnitudeDB(at: $0, sampleRate: options.sampleRate)
                 + treble.magnitudeDB(at: $0, sampleRate: options.sampleRate)
@@ -226,7 +247,8 @@ public enum AutoEQ {
 
     /// `equalize`: inverse of the smoothed error with slopes limited, treble scaled, boosts capped and smoothed.
     static func equalize(grid: [Double], error: [Double], options: AutoEQOptions) -> [Double] {
-        let smoothedError = smoothen(error, grid: grid, windowSize: options.windowSize, trebleWindowSize: options.trebleWindowSize, treble: options.trebleFrequencies)
+        // process() doesn't pass the window sizes on to equalize(), which keeps its own defaults.
+        let smoothedError = smoothen(error, grid: grid, windowSize: 1.0 / 12, trebleWindowSize: 2, treble: options.trebleFrequencies)
         let y = smoothedError.map { -$0 }
 
         let peaks = findPeaks(y, minProminence: 1).indices
@@ -503,18 +525,20 @@ struct PEQ {
     let target: [Double]
     private(set) var bands: [Band]
     private let index10k: Int
+    private let fitStart: Int
     private let fitEnd: Int
     private let cosW: [Double], sinW: [Double], cos2W: [Double], sin2W: [Double]
 
-    init(frequencies: [Double], sampleRate: Double, target: [Double], peakingCount: Int) {
+    init(frequencies: [Double], sampleRate: Double, target: [Double], peakingCount: Int, fitRange: ClosedRange<Double> = 20...20_000) {
         f = frequencies
         fs = sampleRate
         self.target = target
         bands = [Band(kind: .lowShelf, frequency: 105, q: 0.7, gain: 0), Band(kind: .highShelf, frequency: 10_000, q: 0.7, gain: 0)]
             + Array(repeating: Band(kind: .peaking, frequency: 1_000, q: sqrt(2), gain: 0), count: peakingCount)
         index10k = Self.nearestIndex(of: 10_000, in: frequencies)
-        // Loss covers [index of 20 Hz, index of 20 kHz), as NumPy slicing excludes the end.
-        fitEnd = Self.nearestIndex(of: 20_000, in: frequencies)
+        // Loss covers [index of min_f, index of max_f), as NumPy slicing excludes the end.
+        fitStart = Self.nearestIndex(of: fitRange.lowerBound, in: frequencies)
+        fitEnd = max(Self.nearestIndex(of: fitRange.upperBound, in: frequencies), fitStart + 1)
         let w = f.map { 2 * Double.pi * $0 / sampleRate }
         cosW = w.map(cos)
         sinW = w.map(sin)
@@ -604,14 +628,15 @@ struct PEQ {
         }
         let highError = (targetHigh - totalHigh) / highCount
 
-        let fitScale = 1 / sqrt(Double(fitEnd))
-        var result = [Double](repeating: 0, count: fitEnd + f.count * bands.count)
-        for i in 0..<fitEnd {
-            result[i] = (i >= index10k ? highError : target[i] - total[i]) * fitScale
+        let fitCount = fitEnd - fitStart
+        let fitScale = 1 / sqrt(Double(fitCount))
+        var result = [Double](repeating: 0, count: fitCount + f.count * bands.count)
+        for i in fitStart..<fitEnd {
+            result[i - fitStart] = (i >= index10k ? highError : target[i] - total[i]) * fitScale
         }
 
         // Sharpness penalty: peaking filters steeper than about 18 dB/octave.
-        var offset = fitEnd
+        var offset = fitCount
         for (band, r) in zip(bands, responses) {
             if band.kind == .peaking {
                 let gainLimit = -0.09503189270199464 + 20.575128011847003 * (1 / band.q)
