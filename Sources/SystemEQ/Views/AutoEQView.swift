@@ -79,12 +79,14 @@ struct AutoEQView: View {
             }
 
             Section("Target") {
-                slider("Bass boost", $options.bassBoostDB, 0...20, step: 0.5, format: "%+.1f dB")
-                slider("Bass boost below", $options.bassBoostFrequency, 40...200, step: 5, format: "%.0f Hz",
-                       help: "Corner frequency of the bass boost shelf: the boost applies below it")
-                slider("Treble boost", $options.trebleDB, -15...15, step: 0.5, format: "%+.1f dB")
-                slider("Treble boost above", $options.trebleBoostFrequency, 1_000...20_000, step: 500, format: "%.0f Hz",
-                       help: "Corner frequency of the treble boost shelf: the boost applies above it")
+                slider("Bass", $options.bassBoostDB, -20...20, step: 0.5, format: "%+.1f dB",
+                       help: "Raises (positive) or lowers (negative) the target's bass")
+                slider("Bass below", $options.bassBoostFrequency, 40...200, step: 5, format: "%.0f Hz",
+                       help: "Corner frequency of the bass shelf: the bass gain applies below it")
+                slider("Treble", $options.trebleDB, -15...15, step: 0.5, format: "%+.1f dB",
+                       help: "Raises (positive) or lowers (negative) the target's treble")
+                slider("Treble above", $options.trebleBoostFrequency, 1_000...20_000, step: 500, format: "%.0f Hz",
+                       help: "Corner frequency of the treble shelf: the treble gain applies above it")
                 slider("Tilt", $options.tiltDBPerOctave, -1.5...1.5, step: 0.1, format: "%+.1f dB/oct")
                 slider("Max gain", $options.maxBoostDB, 0...36, step: 1, format: "%.0f dB",
                        help: "Largest boost the EQ may apply")
@@ -110,10 +112,10 @@ struct AutoEQView: View {
 
     @ViewBuilder
     private var advancedSettings: some View {
-        slider("Bass boost Q", $options.bassBoostQ, 0.3...0.8, step: 0.05, format: "%.2f",
-               help: "Steepness of the bass boost shelf's transition")
-        slider("Treble boost Q", $options.trebleBoostQ, 0.3...0.8, step: 0.05, format: "%.2f",
-               help: "Steepness of the treble boost shelf's transition")
+        slider("Bass Q", $options.bassBoostQ, 0.3...0.8, step: 0.05, format: "%.2f",
+               help: "Steepness of the bass shelf's transition")
+        slider("Treble Q", $options.trebleBoostQ, 0.3...0.8, step: 0.05, format: "%.2f",
+               help: "Steepness of the treble shelf's transition")
         slider("Max slope", $options.maxSlopeDBPerOctave, 6...36, step: 3, format: "%.0f dB/oct",
                help: "Steepest slope the correction curve may have")
         slider("Smoothing", $options.windowSize, 0...1, step: 0.01, format: "%.2f oct",
