@@ -2,6 +2,9 @@ import CoreAudio
 import EQCore
 import Foundation
 import Observation
+import os
+
+private let log = Logger(subsystem: "com.jakemclain.SystemEQ", category: "audio")
 
 /// Routes all system audio through an `EQProcessor`.
 ///
@@ -23,7 +26,7 @@ final class SystemAudioEQ {
     private var aggregateID = AudioObjectID.unknown
     private var ioProcID: AudioDeviceIOProcID?
     private var defaultDeviceListener: AudioObjectPropertyListenerBlock?
-    private var sampleRateListener: AudioObjectPropertyListenerBlock?
+    private var aggregateListeners: [(AudioObjectPropertySelector, AudioObjectPropertyListenerBlock)] = []
 
     var isRunning: Bool {
         if case .running = state { true } else { false }
@@ -76,14 +79,18 @@ final class SystemAudioEQ {
             kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: outputUID]],
             kAudioAggregateDeviceTapListKey: [[
                 kAudioSubTapUIDKey: description.uuid.uuidString,
+                // The tap and device can run on slightly different clocks. Drift compensation
+                // resamples the tap to match; use the best resampler so treble isn't dulled.
                 kAudioSubTapDriftCompensationKey: true,
+                kAudioSubTapDriftCompensationQualityKey: kAudioAggregateDriftCompensationMaxQuality,
             ]],
         ]
         try check(AudioHardwareCreateAggregateDevice(aggregate as CFDictionary, &aggregateID), "Creating the output device")
 
-        processor.setSampleRate(try aggregateID.read(kAudioDevicePropertyNominalSampleRate, default: Float64(48_000)))
+        let sampleRate = try aggregateID.read(kAudioDevicePropertyNominalSampleRate, default: Float64(48_000))
+        processor.setSampleRate(sampleRate)
         processor.reset()
-        watchSampleRate()
+        watchAggregate()
 
         try check(
             AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, nil, Self.makeRenderBlock(processor: processor, tapChannels: tapChannels)),
@@ -92,13 +99,22 @@ final class SystemAudioEQ {
         try check(AudioDeviceStart(aggregateID, ioProcID), "Starting audio")
 
         state = .running(outputDevice: outputName)
+
+        let deviceRate = (try? outputDevice.read(kAudioDevicePropertyNominalSampleRate, default: Float64(0))) ?? 0
+        let bufferFrames = (try? aggregateID.read(kAudioDevicePropertyBufferFrameSize, default: UInt32(0))) ?? 0
+        log.info("""
+            Started on \(outputName, privacy: .public): device \(deviceRate, privacy: .public) Hz, \
+            aggregate \(sampleRate, privacy: .public) Hz, buffer \(bufferFrames, privacy: .public) frames, \
+            tap \(tapFormat.mSampleRate, privacy: .public) Hz \(tapChannels, privacy: .public)ch \
+            \(tapFormat.mBitsPerChannel, privacy: .public)-bit flags 0x\(String(tapFormat.mFormatFlags, radix: 16), privacy: .public)
+            """)
     }
 
     private func tearDown() {
         if aggregateID != .unknown {
-            if let sampleRateListener {
-                var address = AudioObjectPropertyAddress(kAudioDevicePropertyNominalSampleRate)
-                AudioObjectRemovePropertyListenerBlock(aggregateID, &address, .main, sampleRateListener)
+            for (selector, listener) in aggregateListeners {
+                var address = AudioObjectPropertyAddress(selector)
+                AudioObjectRemovePropertyListenerBlock(aggregateID, &address, .main, listener)
             }
             if let ioProcID {
                 AudioDeviceStop(aggregateID, ioProcID)
@@ -109,7 +125,7 @@ final class SystemAudioEQ {
         if tapID != .unknown {
             AudioHardwareDestroyProcessTap(tapID)
         }
-        sampleRateListener = nil
+        aggregateListeners = []
         ioProcID = nil
         aggregateID = .unknown
         tapID = .unknown
@@ -137,17 +153,27 @@ final class SystemAudioEQ {
         }
     }
 
-    private func watchSampleRate() {
+    /// Keeps the filters designed for the current sample rate, and logs dropouts.
+    private func watchAggregate() {
         let device = aggregateID
-        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+        let sampleRateListener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             MainActor.assumeIsolated {
                 guard let self, let rate = try? device.read(kAudioDevicePropertyNominalSampleRate, default: Float64(0)) else { return }
+                log.info("Sample rate changed to \(rate, privacy: .public) Hz")
                 self.processor.setSampleRate(rate)
             }
         }
-        var address = AudioObjectPropertyAddress(kAudioDevicePropertyNominalSampleRate)
-        if AudioObjectAddPropertyListenerBlock(device, &address, .main, listener) == noErr {
-            sampleRateListener = listener
+        let overloadListener: AudioObjectPropertyListenerBlock = { _, _ in
+            log.error("Audio dropout: the render callback missed its deadline")
+        }
+        for (selector, listener) in [
+            (kAudioDevicePropertyNominalSampleRate, sampleRateListener),
+            (kAudioDeviceProcessorOverload, overloadListener),
+        ] {
+            var address = AudioObjectPropertyAddress(selector)
+            if AudioObjectAddPropertyListenerBlock(device, &address, .main, listener) == noErr {
+                aggregateListeners.append((selector, listener))
+            }
         }
     }
 
