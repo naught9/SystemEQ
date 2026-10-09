@@ -121,14 +121,15 @@ struct MenuContentView: View {
         VStack(alignment: .leading, spacing: 6) {
             if let importMessage {
                 Text(importMessage).font(.caption).foregroundStyle(.orange)
-            } else if model.library.skippedFileCount > 0 {
-                Text("\(model.library.skippedFileCount) .txt files skipped (not parametric EQ, e.g. measurements)")
+            } else if !model.library.measurements.isEmpty || model.library.skippedFileCount > 0 {
+                Text("\(model.library.measurements.count) measurements available in AutoEQ · \(model.library.skippedFileCount) unreadable files skipped")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             HStack {
                 Button("Equalizer…") { open(WindowID.editor) }
                 Button("Visualizer…") { open(WindowID.visualizer) }
+                Button("AutoEQ…") { open(WindowID.autoEQ) }
             }
             HStack {
                 Button("Add Folder…", action: addFolder)

@@ -96,6 +96,13 @@ final class AppModel {
         try preset.equalizerAPOText.write(to: url, atomically: true, encoding: .utf8)
     }
 
+    /// Makes a generated preset the working preset, as an unsaved preset.
+    func useUnsaved(_ newPreset: ParametricPreset) {
+        loadedPresetPath = nil
+        isEdited = true
+        preset = newPreset
+    }
+
     /// Discards edits and returns to the loaded preset.
     func revert() {
         load(library.entry(forPath: loadedPresetPath))

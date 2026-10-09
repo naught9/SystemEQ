@@ -28,8 +28,16 @@ On first enable, macOS asks for permission to capture system audio. If you denie
 
 ## Using it
 
-1. Click the menu bar icon and choose **Add Folder…** to add a folder of presets (searched recursively), or **Import…** to copy individual files into the app's own preset folder.
+1. Click the menu bar icon and choose **Add Folder…** to add a folder of presets and measurements (searched recursively), or **Import…** to copy individual presets into the app's own preset folder.
 2. Pick a preset and turn on the switch.
+
+From the menu bar you can also open:
+
+- **Equalizer**: edit the current preset with up to 20 parametric bands. Drag points on the curve (hold ⌥ to change Q) or type values. Editing a library preset turns it into a new unsaved preset; **Save as Preset…** adds it to the library and **Export…** writes an Equalizer APO / AutoEQ `.txt` file.
+- **Visualizer**: post-EQ spectrum (4k–32k point FFT with peak hold and optional tilt) and BS.1770 / EBU R 128 loudness (momentary, short-term, integrated LUFS) with sample peak meters.
+- **AutoEQ**: generate a preset that makes a measured headphone (source) sound like another headphone or a target curve, AutoEQ style: curves aligned at 1 kHz, 1/12-octave smoothing widening above 6 kHz, boosts capped (default +6 dB), then a 105 Hz low shelf, peaking filters and a 10 kHz high shelf fitted by least squares. Bass boost, treble and tilt adjust the target like autoeq.app's sliders. Measurements are two-column text files (frequency, dB) as exported by squig.link or AutoEQ.
+
+The fitter follows AutoEQ's approach but isn't a port of it, so results can differ from autoeq.app's for the same files, mostly in the treble.
 
 SystemEQ follows your default output device, so switching outputs or plugging in headphones moves the EQ to the new device. The preset's preamp is applied as well, so audio will sound quieter with EQ on, which prevents clipping.
 
@@ -43,9 +51,9 @@ SystemEQ follows your default output device, so switching outputs or plugging in
 
 | Path | Contents |
 | --- | --- |
-| `Sources/EQCore` | Platform-independent preset parser, biquad filters and real-time `EQProcessor`. No macOS dependencies, so an iOS app can reuse it. |
+| `Sources/EQCore` | Platform-independent preset parsing and export, biquad filters, real-time `EQProcessor`, measurement parsing, AutoEQ-style fitter, spectrum analyzer and loudness meter. No macOS dependencies, so an iOS app can reuse it. |
 | `Sources/SystemEQ/Audio` | Core Audio tap and aggregate device (macOS only). |
 | `Sources/SystemEQ` | Menu bar app: preset library, settings and SwiftUI views. |
-| `Tests/EQCoreTests` | Parser and DSP tests. |
+| `Tests/EQCoreTests` | Parser, DSP, metering and fitter tests. |
 
 iOS doesn't allow apps to process other apps' audio, so an iOS version could only EQ audio it plays itself, for example a built-in music player using `EQCore`.

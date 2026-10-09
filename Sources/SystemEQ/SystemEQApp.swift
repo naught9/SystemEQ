@@ -21,10 +21,16 @@ struct SystemEQApp: App {
             VisualizerView(engine: model.engine)
         }
         .defaultSize(width: 900, height: 600)
+
+        Window("AutoEQ", id: WindowID.autoEQ) {
+            AutoEQView(model: model)
+        }
+        .defaultSize(width: 980, height: 720)
     }
 }
 
 enum WindowID {
     static let editor = "editor"
     static let visualizer = "visualizer"
+    static let autoEQ = "autoeq"
 }

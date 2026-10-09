@@ -2,7 +2,8 @@ import EQCore
 import Foundation
 import Observation
 
-/// Presets found in the user's chosen folders plus the app's own import folder.
+/// Presets and frequency response measurements found in the user's chosen folders
+/// plus the app's own import folder.
 /// Mutating methods don't rescan; call `reload()` (via `AppModel.reloadLibrary()`) afterwards.
 @Observable @MainActor
 final class PresetLibrary {
@@ -17,9 +18,21 @@ final class PresetLibrary {
         func hash(into hasher: inout Hasher) { hasher.combine(url) }
     }
 
+    struct Measurement: Identifiable, Hashable {
+        var id: String { url.path }
+        let url: URL
+        let group: String
+        let response: FrequencyResponse
+
+        static func == (lhs: Measurement, rhs: Measurement) -> Bool { lhs.url == rhs.url }
+        func hash(into hasher: inout Hasher) { hasher.combine(url) }
+    }
+
     private(set) var entries: [Entry] = []
+    /// Headphone measurements and target curves, for building presets with AutoEQ.
+    private(set) var measurements: [Measurement] = []
     private(set) var folders: [URL]
-    /// Text files that weren't parametric presets, e.g. frequency response measurements.
+    /// Text files that were neither presets nor measurements.
     private(set) var skippedFileCount = 0
 
     static let importFolder = URL.applicationSupportDirectory
@@ -77,20 +90,26 @@ final class PresetLibrary {
 
     func reload() {
         var found: [Entry] = []
+        var foundMeasurements: [Measurement] = []
         var skipped = 0
         for root in [Self.importFolder] + folders {
             for url in Self.textFiles(in: root) {
-                guard let preset = try? PresetParser.parse(contentsOf: url) else {
-                    skipped += 1
-                    continue
-                }
                 let relative = url.deletingLastPathComponent().path.dropFirst(root.path.count)
                 let group = root == Self.importFolder ? "Imported" : root.lastPathComponent + relative
-                found.append(Entry(url: url, group: group, preset: preset))
+                if let preset = try? PresetParser.parse(contentsOf: url) {
+                    found.append(Entry(url: url, group: group, preset: preset))
+                } else if let response = try? FrequencyResponse.parse(contentsOf: url) {
+                    foundMeasurements.append(Measurement(url: url, group: group, response: response))
+                } else {
+                    skipped += 1
+                }
             }
         }
         entries = found.sorted {
             ($0.group, $0.preset.name.localizedLowercase) < ($1.group, $1.preset.name.localizedLowercase)
+        }
+        measurements = foundMeasurements.sorted {
+            ($0.group, $0.response.name.localizedLowercase) < ($1.group, $1.response.name.localizedLowercase)
         }
         skippedFileCount = skipped
     }
