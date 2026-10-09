@@ -20,3 +20,17 @@ mkdir -p /tmp/jsfx-scratch
 
 Expected: differences around 1e-12 (−220 dB) from the 64-bit reference, and around 3e-8 (−150 dB) from
 `EQProcessor`, which rounds its output to 32-bit floats.
+
+## Previewing the graph
+
+`render.cpp` runs a script's `@gfx` and saves a PNG, to check the graph without a JSFX host. Build ysfx with
+graphics (`-DYSFX_GFX=ON`, add `-DYSFX_PORTABLE=ON` to match EffectDeck's interpreter), then:
+
+```sh
+clang++ -std=c++17 -O2 -I /tmp/ysfx/include scripts/jsfx-verify/render.cpp /tmp/ysfx/build/libysfx.a \
+  -framework CoreFoundation -framework Foundation -framework CoreGraphics -framework ImageIO \
+  -framework CoreText -framework AppKit -framework Carbon -o /tmp/jsfx-render
+/tmp/jsfx-render "SystemEQ Presets.jsfx" 0 preview.png   # preset index 0, at 2x scale
+```
+
+Link `host.cpp` with the same frameworks when ysfx is built with graphics.

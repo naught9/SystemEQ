@@ -44,4 +44,21 @@ struct JSFXExportTests {
         #expect(!script.contains("slider3"))
         #expect(!script.contains("Bypassed"))
     }
+
+    @Test func drawsTheResponseWithPresetNamesAndOneScale() {
+        let script = JSFXExport.script(presets: [claude, harman], title: "Presets")
+        #expect(script.contains("\n@gfx 640 360\n"))
+        #expect(script.contains("strcpy(names + 0, \"dusk -> claude target\");"))
+        #expect(script.contains("strcpy(names + 1, \"dusk -> harman, 2019 <v2>\");"))
+        // The largest boost or cut across both presets is about 5 dB, so they share a ±10 dB graph.
+        #expect(script.contains("graphRange = 10;"))
+    }
+
+    @Test func neverContainsTextEffectDeckRejects() {
+        // EffectDeck rejects a script containing "include(" anywhere, even in a string.
+        let tricky = ParametricPreset(name: "My \"include(x)\" preset", preampDB: -1, filters: [])
+        let script = JSFXExport.script(presets: [tricky], title: "include(me)")
+        #expect(!script.contains("include("))
+        #expect(script.contains("strcpy(names + 0, \"My 'include (x)' preset\");"))
+    }
 }

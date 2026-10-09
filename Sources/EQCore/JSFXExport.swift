@@ -9,13 +9,25 @@ public enum JSFXExport {
     /// replace an earlier import with the same `title`, so re-exporting updates the effect in place.
     public static func script(presets: [ParametricPreset], title: String) -> String {
         precondition(!presets.isEmpty, "A JSFX needs at least one preset")
+        precondition(presets.count <= maxPresets, "A JSFX holds at most \(maxPresets) presets")
         let selectorHidden = presets.count == 1 ? "-" : ""
+        // One dB scale for every preset, so switching between them shows their real differences:
+        // ±10 to ±30 dB in 5 dB steps, fitting the largest boost or cut of any preset.
+        let peak = presets.map { preset in
+            var shape = preset
+            shape.preampDB = 0
+            return FrequencyResponse.logGrid(from: 20, to: 20_000, pointsPerOctave: 24)
+                .map { abs(shape.responseDB(at: $0)) }
+                .max() ?? 0
+        }.max() ?? 0
+        let graphRange = min(30, max(10, ((peak + 1) / 5).rounded(.up) * 5))
 
         var data: [String] = []
         for (index, preset) in presets.enumerated() {
             let enabled = preset.filters.filter(\.isEnabled).prefix(EQProcessor.maxFilters)
-            data.append("// \(index): \(preset.name)")
+            data.append("// \(index): \(singleLine(preset.name))")
             data.append("preset(\(index), \(enabled.count), \(number(preset.preampDB)));")
+            data.append("strcpy(names + \(index), \"\(stringLiteral(preset.name))\");")
             for (band, filter) in enabled.enumerated() {
                 data.append("band(\(index), \(band), \(typeCode(filter.type)), \(number(filter.frequency)), \(number(filter.gainDB)), \(number(filter.q)));")
             }
@@ -46,6 +58,21 @@ public enum JSFXExport {
         cb0 = 0; cb1 = 64; cb2 = 128; ca1 = 192; ca2 = 256;
         s1 = 1024; s2 = s1 + maxBands * maxChannels;
         presets = 8192; presetSize = 2 + 4 * maxBands;
+        // String slots for preset names, and frequencies for the graph's grid lines.
+        names = 100;
+        // Placed after the preset table, which holds up to \(maxPresets) presets.
+        gridFrequencies = presets + \(maxPresets) * presetSize;
+        gridFrequencies[0] = 20; gridFrequencies[1] = 50; gridFrequencies[2] = 100; gridFrequencies[3] = 200;
+        gridFrequencies[4] = 500; gridFrequencies[5] = 1000; gridFrequencies[6] = 2000; gridFrequencies[7] = 5000;
+        gridFrequencies[8] = 10000; gridFrequencies[9] = 20000;
+        // The graph's cached response, recomputed when the preset or sample rate changes.
+        graphCurve = gridFrequencies + 16;
+        graphPreset = -1;
+        graphRange = \(number(graphRange));
+
+        // Graph coordinates, from the layout set at the start of @gfx.
+        function gY(db) ( gTop + (graphRange - db) / (2 * graphRange) * gHeight; );
+        function gX(f) ( gLeft + log(f / 20) / log(1000) * gWidth; );
 
         function preset(p, count, preampDB) local(o) (
           o = presets + p * presetSize;
@@ -142,6 +169,108 @@ public enum JSFXExport {
           ch += 1;
         );
 
+        @gfx 640 360
+        // The selected preset's response, computed from the coefficients being applied. This can run on a
+        // separate thread from @sample, so it uses its own variable names (prefixed g) throughout.
+        gScale = gfx_w / 640;
+        gLeft = 44 * gScale; gRight = gfx_w - 14 * gScale;
+        gTop = 38 * gScale; gBottom = gfx_h - 26 * gScale;
+        gWidth = gRight - gLeft; gHeight = gBottom - gTop;
+        gColumns = max(2, min(floor(gWidth), 2048));
+
+        loaded != graphPreset || srate != graphRate || gColumns != graphColumns ? (
+          graphPreset = loaded; graphRate = srate; graphColumns = gColumns;
+          gj = 0;
+          loop(gColumns,
+            gf = 20 * 1000 ^ (gj / (gColumns - 1));
+            gw = 2 * $pi * gf / srate;
+            gc1 = cos(gw); gs1 = sin(gw); gc2 = cos(2 * gw); gs2 = sin(2 * gw);
+            gdb = 0;
+            gf < srate / 2 ? (
+              gi = 0;
+              loop(bandCount,
+                gnr = cb0[gi] + cb1[gi] * gc1 + cb2[gi] * gc2;
+                gni = cb1[gi] * gs1 + cb2[gi] * gs2;
+                gdr = 1 + ca1[gi] * gc1 + ca2[gi] * gc2;
+                gdi = ca1[gi] * gs1 + ca2[gi] * gs2;
+                gdb += 10 * log10((gnr * gnr + gni * gni) / (gdr * gdr + gdi * gdi));
+                gi += 1;
+              );
+            );
+            graphCurve[gj] = gdb;
+            gj += 1;
+          );
+        );
+
+        gfx_set(0.07, 0.08, 0.1, 1);
+        gfx_rect(0, 0, gfx_w, gfx_h);
+        gfx_setfont(1, "Arial", 12 * gScale);
+
+        // Grid: dB lines with labels, then frequency lines.
+        gStep = graphRange > 20 ? 10 : 5;
+        gv = -graphRange;
+        loop(2 * graphRange / gStep + 1,
+          gv == 0 ? gfx_set(0.45, 0.47, 0.52, 1) : gfx_set(0.2, 0.22, 0.26, 1);
+          gfx_line(gLeft, gY(gv), gRight, gY(gv));
+          gfx_set(0.55, 0.57, 0.62, 1);
+          gv > 0 ? sprintf(#gLabel, "+%d", gv) : sprintf(#gLabel, "%d", gv);
+          gfx_measurestr(#gLabel, gTextW, gTextH);
+          gfx_x = gLeft - gTextW - 6 * gScale; gfx_y = gY(gv) - gTextH / 2;
+          gfx_drawstr(#gLabel);
+          gv += gStep;
+        );
+        gk = 0;
+        loop(10,
+          gx = gX(gridFrequencies[gk]);
+          gfx_set(0.2, 0.22, 0.26, 1);
+          gfx_line(gx, gTop, gx, gBottom);
+          gk == 2 || gk == 5 || gk == 8 ? (
+            gfx_set(0.55, 0.57, 0.62, 1);
+            gk == 2 ? (#gLabel = "100") : gk == 5 ? (#gLabel = "1k") : (#gLabel = "10k");
+            gfx_measurestr(#gLabel, gTextW, gTextH);
+            gfx_x = gx - gTextW / 2; gfx_y = gBottom + 6 * gScale;
+            gfx_drawstr(#gLabel);
+          );
+          gk += 1;
+        );
+
+        // The curve, with a translucent fill to 0 dB.
+        gZero = gY(0);
+        gfx_set(0.35, 0.62, 1, 0.16);
+        gj = 0;
+        loop(graphColumns,
+          gx = gLeft + gj / (graphColumns - 1) * gWidth;
+          gfx_line(gx, gZero, gx, gY(graphCurve[gj]));
+          gj += 1;
+        );
+        gfx_set(0.42, 0.7, 1, 1);
+        gj = 0;
+        loop(graphColumns,
+          gx = gLeft + gj / (graphColumns - 1) * gWidth;
+          gy = gY(graphCurve[gj]);
+          gj == 0 ? (gfx_x = gx; gfx_y = gy) : gfx_lineto(gx, gy, 1);
+          gj += 1;
+        );
+        gj = 0;
+        loop(graphColumns,
+          gx = gLeft + gj / (graphColumns - 1) * gWidth;
+          gy = gY(graphCurve[gj]) + max(1, gScale);
+          gj == 0 ? (gfx_x = gx; gfx_y = gy) : gfx_lineto(gx, gy, 1);
+          gj += 1;
+        );
+
+        // Title: preset name and the preamp being applied.
+        gfx_setfont(2, "Arial", 15 * gScale, 'b');
+        gfx_set(0.92, 0.93, 0.95, 1);
+        gfx_x = gLeft; gfx_y = 10 * gScale;
+        gfx_drawstr(names + graphPreset);
+        gfx_setfont(1, "Arial", 12 * gScale);
+        gfx_set(0.6, 0.62, 0.67, 1);
+        sprintf(#gLabel, "preamp %.2f dB", presetPreampDB + slider2);
+        gfx_measurestr(#gLabel, gTextW, gTextH);
+        gfx_x = gRight - gTextW; gfx_y = 12 * gScale;
+        gfx_drawstr(#gLabel);
+
         """
     }
 
@@ -174,8 +303,19 @@ public enum JSFXExport {
             .replacingOccurrences(of: "}", with: ")")
     }
 
+    /// Preset names are stored as string slots `names + index`, below EEL2's 1024 string slots.
+    static let maxPresets = 900
+
+    /// A preset name as the contents of an EEL2 string literal.
+    static func stringLiteral(_ name: String) -> String {
+        singleLine(name).replacingOccurrences(of: "\\", with: "/").replacingOccurrences(of: "\"", with: "'")
+    }
+
+    /// Text on one line, without the `include(` sequence, which EffectDeck rejects anywhere in a script.
     private static func singleLine(_ text: String) -> String {
-        text.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
+        text.replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "include(", with: "include (", options: .caseInsensitive)
     }
 }
 
