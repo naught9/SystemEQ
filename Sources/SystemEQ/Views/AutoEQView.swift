@@ -62,9 +62,9 @@ struct AutoEQView: View {
     private var settings: some View {
         Form {
             Section {
-                measurementPicker("Source", selection: $sourceID)
+                MeasurementPicker(title: "Source", measurements: model.library.measurements, selection: $sourceID)
                 if let source { rigPicker(for: source) }
-                measurementPicker("Target", selection: $targetID)
+                MeasurementPicker(title: "Target", measurements: model.library.measurements, selection: $targetID)
                 if let target { rigPicker(for: target) }
                 if source != nil && target != nil {
                     rigStatus
@@ -166,20 +166,6 @@ struct AutoEQView: View {
         return Label(message, systemImage: icon)
             .font(.caption)
             .foregroundStyle(color)
-    }
-
-    private func measurementPicker(_ title: String, selection: Binding<String?>) -> some View {
-        let groups = Dictionary(grouping: model.library.measurements, by: \.group)
-        return Picker(title, selection: selection) {
-            Text("None").tag(String?.none)
-            ForEach(groups.keys.sorted(), id: \.self) { group in
-                Section(group) {
-                    ForEach(groups[group] ?? []) { measurement in
-                        Text(measurement.response.name).tag(Optional(measurement.id))
-                    }
-                }
-            }
-        }
     }
 
     private func slider(
@@ -339,6 +325,27 @@ struct AutoEQView: View {
             try model.saveToLibrary(named: preset.name)
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+}
+
+/// Picks a measurement or target curve from the library, grouped by folder.
+struct MeasurementPicker: View {
+    let title: String
+    let measurements: [PresetLibrary.Measurement]
+    @Binding var selection: String?
+
+    var body: some View {
+        let groups = Dictionary(grouping: measurements, by: \.group)
+        Picker(title, selection: $selection) {
+            Text("None").tag(String?.none)
+            ForEach(groups.keys.sorted(), id: \.self) { group in
+                Section(group) {
+                    ForEach(groups[group] ?? []) { measurement in
+                        Text(measurement.response.name).tag(Optional(measurement.id))
+                    }
+                }
+            }
         }
     }
 }

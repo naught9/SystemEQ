@@ -55,6 +55,18 @@ struct AutoEQTests {
         #expect(result.rmsErrorDB < 0.05)
     }
 
+    @Test func centeredMatchesTheSourceCurveFitShows() {
+        // The Equalizer window draws a raw curve with `centered`, so it must match the AutoEQ window's source curve.
+        let source = curve("bumpy") { 95 + 6 * sin(log2($0) * 3) }
+        let result = AutoEQ.fit(source: source, target: curve("flat") { _ in 0 }, name: "fit")
+
+        let raw = AutoEQ.centered(source, smoothed: false)
+        let smoothed = AutoEQ.centered(source, smoothed: true)
+        #expect(raw.frequencies == result.frequencies)
+        #expect(raw.db == result.source)
+        #expect(smoothed.db == result.sourceSmoothed)
+    }
+
     /// Compares against the original Python AutoEq run on the same synthetic curves (optimizer run to
     /// convergence). Regenerate with scripts/autoeq-reference, as described in README.md.
     @Test(arguments: [

@@ -7,12 +7,21 @@ struct EditorView: View {
     @Bindable var model: AppModel
     @State private var selectedBand: Int?
     @State private var errorMessage: String?
+    @AppStorage("editorRawCurve") private var rawCurveID: String?
+    @AppStorage("editorCurves") private var storedCurves = EditorCurve.defaultSelection
+    @AppStorage("editorSmoothed") private var showSmoothed = true
+
+    private var visibleCurves: Set<EditorCurve> {
+        get { EditorCurve.decode(storedCurves) }
+        nonmutating set { storedCurves = EditorCurve.encode(newValue) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             toolbar
-            EQCurveEditor(model: model, selectedBand: $selectedBand)
+            EQCurveEditor(model: model, selectedBand: $selectedBand, raw: rawCurve, curves: visibleCurves)
                 .frame(minHeight: 240)
+            curveControls
             preampRow
             Divider()
             bandTable
@@ -41,11 +50,52 @@ struct EditorView: View {
                 Button("Revert", action: model.revert)
             }
             Button("Reset to Flat") { model.edit { $0.preampDB = 0; $0.filters = [] } }
+            Button("Save", action: save)
+                .keyboardShortcut("s")
+                .disabled(!model.canSave)
+                .help("Save your changes to the preset file they were made to")
             Button("Save as Preset…", action: saveToLibrary)
             Button("Export…", action: export)
             Button("Export JSFX…", action: exportJSFX)
                 .help("Save as a JSFX effect for REAPER or EffectDeck on iOS that sounds identical to SystemEQ")
         }
+    }
+
+    private var rawMeasurement: PresetLibrary.Measurement? {
+        model.library.measurements.first { $0.id == rawCurveID }
+    }
+
+    /// The chosen measurement at 0 dB at 1 kHz, as the AutoEQ window shows a source.
+    private var rawCurve: RawCurve? {
+        rawMeasurement.map { RawCurve(AutoEQ.centered($0.response, smoothed: showSmoothed)) }
+    }
+
+    private var curveControls: some View {
+        HStack(spacing: 12) {
+            MeasurementPicker(title: "Raw curve", measurements: model.library.measurements, selection: $rawCurveID)
+                .frame(maxWidth: 340)
+                .help("A measurement of your headphones, to see how the EQ changes them")
+            ForEach(EditorCurve.allCases, id: \.self) { curve in
+                Toggle(isOn: Binding(
+                    get: { visibleCurves.contains(curve) },
+                    set: { isOn in
+                        if isOn { visibleCurves.insert(curve) } else { visibleCurves.remove(curve) }
+                    }
+                )) {
+                    Text(curve.title).foregroundStyle(curve.color)
+                }
+                .toggleStyle(.checkbox)
+                .disabled(curve != .equalizer && rawMeasurement == nil)
+                .help(curve.help)
+            }
+            Spacer()
+            Toggle("Smoothed", isOn: $showSmoothed)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .disabled(rawMeasurement == nil)
+                .help("Show the raw and equalized curves smoothed, as in the AutoEQ window")
+        }
+        .font(.caption)
     }
 
     private var preampRow: some View {
@@ -124,6 +174,14 @@ struct EditorView: View {
     }
 
     // MARK: Actions
+
+    private func save() {
+        do {
+            try model.save()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
 
     private func saveToLibrary() {
         let alert = NSAlert()
@@ -221,31 +279,121 @@ private struct BandRow: View {
     }
 }
 
+/// Curves the Equalizer graph can show behind the band handles.
+enum EditorCurve: String, CaseIterable {
+    case raw, equalizer, equalized
+
+    static let defaultSelection = encode(Set(allCases))
+
+    var title: String {
+        switch self {
+        case .raw: "Raw"
+        case .equalizer: "Equalizer"
+        case .equalized: "Equalized"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .raw: "The raw curve, at 0 dB at 1 kHz"
+        case .equalizer: "What the EQ does, preamp included"
+        case .equalized: "Predicted result: the raw curve with the EQ applied. The preamp is left out so it lines up with the raw curve."
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .raw: .primary
+        case .equalizer: .accentColor
+        case .equalized: .orange
+        }
+    }
+
+    static func encode(_ curves: Set<EditorCurve>) -> String {
+        allCases.filter(curves.contains).map(\.rawValue).joined(separator: ",")
+    }
+
+    static func decode(_ text: String) -> Set<EditorCurve> {
+        Set(text.split(separator: ",").compactMap { EditorCurve(rawValue: String($0)) })
+    }
+}
+
+/// A measurement prepared for drawing.
+struct RawCurve {
+    let frequencies: [Double]
+    let db: [Double]
+
+    init(_ curve: (frequencies: [Double], db: [Double])) {
+        (frequencies, db) = curve
+    }
+
+    func index(nearest frequency: Double) -> Int {
+        frequencies.indices.min { abs(log(frequencies[$0] / frequency)) < abs(log(frequencies[$1] / frequency)) }!
+    }
+}
+
 /// The response curve with a draggable handle per band.
 private struct EQCurveEditor: View {
     @Bindable var model: AppModel
     @Binding var selectedBand: Int?
+    let raw: RawCurve?
+    let curves: Set<EditorCurve>
     @State private var dragging: Int?
     @State private var dragStartQ = 1.0
+    @State private var hoverX: Double?
 
-    private let dbRange = -20.0...20.0
+    /// ±20 dB, widened in 5 dB steps (up to ±40 dB) to fit the raw curve. It depends only on the raw
+    /// curve so the scale stays put while bands are dragged.
+    private var dbRange: ClosedRange<Double> {
+        guard let raw, !curves.isDisjoint(with: [.raw, .equalized]) else { return -20...20 }
+        let low = max(((raw.db.min() ?? 0) - 2) / 5, -8).rounded(.down) * 5
+        let high = min(((raw.db.max() ?? 0) + 2) / 5, 8).rounded(.up) * 5
+        return min(low, -20)...max(high, 20)
+    }
+
+    /// The EQ's response without the preamp at each of the raw curve's frequencies.
+    private func filterResponse(at frequencies: [Double]) -> [Double] {
+        var filtersOnly = model.preset
+        filtersOnly.preampDB = 0
+        return frequencies.map { filtersOnly.responseDB(at: $0) }
+    }
 
     var body: some View {
         GeometryReader { geometry in
-            let scale = PlotScale(size: geometry.size, db: dbRange)
-            Canvas { context, _ in
-                scale.drawGrid(in: context, dbStep: 5)
+            let range = dbRange
+            let scale = PlotScale(size: geometry.size, db: range)
+            Canvas { context, size in
+                scale.drawGrid(in: context, dbStep: range.upperBound - range.lowerBound > 50 ? 10 : 5)
                 var zero = Path()
                 zero.move(to: scale.point(20, 0))
                 zero.addLine(to: scale.point(20_000, 0))
                 context.stroke(zero, with: .color(.secondary.opacity(0.5)), lineWidth: 0.5)
 
-                for (index, filter) in model.preset.filters.enumerated() where filter.isEnabled {
-                    let single = ParametricPreset(name: "", filters: [filter])
-                    let color: Color = index == selectedBand ? .accentColor : .secondary
-                    context.stroke(scale.curve { single.responseDB(at: $0) }, with: .color(color.opacity(index == selectedBand ? 0.6 : 0.25)), lineWidth: 1)
+                if let raw {
+                    if curves.contains(.raw) {
+                        context.stroke(path(raw.frequencies, raw.db, scale: scale), with: .color(EditorCurve.raw.color.opacity(0.7)), lineWidth: 1.2)
+                    }
+                    if curves.contains(.equalized) {
+                        let equalized = zip(raw.db, filterResponse(at: raw.frequencies)).map(+)
+                        context.stroke(path(raw.frequencies, equalized, scale: scale), with: .color(EditorCurve.equalized.color), lineWidth: 1.8)
+                    }
                 }
-                context.stroke(scale.curve { model.preset.responseDB(at: $0) }, with: .color(.accentColor), lineWidth: 2)
+
+                if curves.contains(.equalizer) {
+                    for (index, filter) in model.preset.filters.enumerated() where filter.isEnabled {
+                        let single = ParametricPreset(name: "", filters: [filter])
+                        let color: Color = index == selectedBand ? .accentColor : .secondary
+                        context.stroke(scale.curve { single.responseDB(at: $0) }, with: .color(color.opacity(index == selectedBand ? 0.6 : 0.25)), lineWidth: 1)
+                    }
+                    context.stroke(scale.curve { model.preset.responseDB(at: $0) }, with: .color(.accentColor), lineWidth: 2)
+                }
+
+                if let hoverX {
+                    var line = Path()
+                    line.move(to: CGPoint(x: hoverX, y: 0))
+                    line.addLine(to: CGPoint(x: hoverX, y: size.height))
+                    context.stroke(line, with: .color(.secondary.opacity(0.6)), lineWidth: 0.5)
+                }
 
                 for (index, filter) in model.preset.filters.enumerated() {
                     let center = handlePoint(filter, scale: scale)
@@ -264,9 +412,54 @@ private struct EQCurveEditor: View {
             .simultaneousGesture(SpatialTapGesture(count: 2).onEnded { value in
                 addBand(at: value.location, scale: scale)
             })
+            .onContinuousHover { phase in
+                switch phase {
+                case let .active(location): hoverX = location.x
+                case .ended: hoverX = nil
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if let hoverX {
+                    readout(at: scale.frequency(atX: hoverX))
+                        .padding(8)
+                        .allowsHitTesting(false)
+                }
+            }
         }
         .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func path(_ frequencies: [Double], _ values: [Double], scale: PlotScale) -> Path {
+        var path = Path()
+        for (index, frequency) in frequencies.enumerated() {
+            let point = scale.point(frequency, values[index])
+            index == 0 ? path.move(to: point) : path.addLine(to: point)
+        }
+        return path
+    }
+
+    /// Values of the visible curves at `frequency`, snapped to the raw curve's nearest point if there is one.
+    private func readout(at frequency: Double) -> some View {
+        let index = raw?.index(nearest: frequency)
+        let shownFrequency = index.map { raw!.frequencies[$0] } ?? frequency
+        var rows: [(EditorCurve, Double)] = []
+        if let raw, let index {
+            if curves.contains(.raw) { rows.append((.raw, raw.db[index])) }
+            if curves.contains(.equalized) { rows.append((.equalized, raw.db[index] + filterResponse(at: [shownFrequency])[0])) }
+        }
+        if curves.contains(.equalizer) { rows.append((.equalizer, model.preset.responseDB(at: shownFrequency))) }
+        return VStack(alignment: .trailing, spacing: 2) {
+            Text(shownFrequency >= 1_000 ? String(format: "%.2f kHz", shownFrequency / 1_000) : String(format: "%.0f Hz", shownFrequency))
+                .fontWeight(.semibold)
+            ForEach(rows, id: \.0) { curve, value in
+                Text(String(format: "%@ %+.1f dB", curve.title, value))
+                    .foregroundStyle(curve.color)
+            }
+        }
+        .font(.caption.monospacedDigit())
+        .padding(6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
     }
 
     /// Bands without gain sit on the 0 dB line.

@@ -82,14 +82,29 @@ final class AppModel {
 
     /// Writes the working preset into the library's import folder under `name` and makes it the loaded preset.
     func saveToLibrary(named name: String) throws {
+        try write(to: PresetLibrary.importFolder.appending(path: PresetLibrary.fileName(for: name)), name: name)
+    }
+
+    /// True if the working preset has edits that can be saved back to the file it was loaded from.
+    var canSave: Bool {
+        isEdited && library.entry(forPath: loadedPresetPath) != nil
+    }
+
+    /// Writes the working preset over the file it was loaded from, keeping that file's name.
+    func save() throws {
+        guard isEdited, let entry = library.entry(forPath: loadedPresetPath) else { return }
+        try write(to: entry.url, name: entry.preset.name)
+    }
+
+    private func write(to url: URL, name: String) throws {
         var saved = preset
         saved.name = name
-        let url = PresetLibrary.importFolder.appending(path: PresetLibrary.fileName(for: name))
         try saved.equalizerAPOText.write(to: url, atomically: true, encoding: .utf8)
         library.reload()
         loadedPresetPath = url.path
         isEdited = false
-        preset = saved
+        // Use the preset as read back, so the working preset matches the file's rounded values exactly.
+        preset = library.entry(forPath: url.path)?.preset ?? saved
     }
 
     /// Makes a generated preset the working preset, as an unsaved preset.

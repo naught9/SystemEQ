@@ -165,6 +165,17 @@ public enum AutoEQ {
         )
     }
 
+    /// `response` as `fit` shows a source: on AutoEq's frequency grid, 0 dB at 1 kHz,
+    /// and smoothed with the options' smoothing windows if `smoothed`.
+    public static func centered(_ response: FrequencyResponse, smoothed: Bool, options: AutoEQOptions = AutoEQOptions()) -> (frequencies: [Double], db: [Double]) {
+        let grid = frequencies(step: step)
+        let raw = interpolate(response, to: grid)
+        let center = interpolate(x: grid, y: raw, at: [1_000])[0]
+        let db = raw.map { $0 - center }
+        guard smoothed else { return (grid, db) }
+        return (grid, smoothen(db, grid: grid, windowSize: options.windowSize, trebleWindowSize: options.trebleWindowSize, treble: options.trebleFrequencies))
+    }
+
     // MARK: utils.py
 
     /// `generate_frequencies`: geometric sequence from 20 Hz while ≤ 20 kHz.
