@@ -80,9 +80,12 @@ final class AppModel {
         }
     }
 
-    /// Writes the working preset into the library's import folder under `name` and makes it the loaded preset.
-    func saveToLibrary(named name: String) throws {
-        try write(to: PresetLibrary.importFolder.appending(path: PresetLibrary.fileName(for: name)), name: name)
+    /// Writes the working preset to `url`, named after the file, and makes it the loaded preset.
+    /// A folder outside the library is added to it, so the preset shows up in the preset list.
+    func saveAs(to url: URL) throws {
+        let folder = url.deletingLastPathComponent()
+        if !library.contains(folder) { library.addFolder(folder) }
+        try write(to: url, name: url.deletingPathExtension().lastPathComponent)
     }
 
     /// True if the working preset has edits that can be saved back to the file it was loaded from.

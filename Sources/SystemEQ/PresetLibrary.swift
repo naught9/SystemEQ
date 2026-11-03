@@ -39,6 +39,7 @@ final class PresetLibrary {
         .appending(path: "SystemEQ/Presets", directoryHint: .isDirectory)
 
     private static let foldersKey = "presetFolders"
+    private static let saveFolderKey = "presetSaveFolder"
     private static let rigOverridesKey = "measurementRigs"
 
     /// Rigs the user chose for measurements whose rig couldn't be inferred (or was inferred wrongly), by path.
@@ -62,8 +63,21 @@ final class PresetLibrary {
         name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-") + ".txt"
     }
 
-    static func importedPresetExists(named name: String) -> Bool {
-        FileManager.default.fileExists(atPath: importFolder.appending(path: fileName(for: name)).path)
+    /// Folder the last preset was saved to, where the next save starts.
+    static var saveFolder: URL {
+        get {
+            UserDefaults.standard.string(forKey: saveFolderKey).map { URL(filePath: $0, directoryHint: .isDirectory) } ?? importFolder
+        }
+        set { UserDefaults.standard.set(newValue.path, forKey: saveFolderKey) }
+    }
+
+    /// True if files in `folder` are scanned: it is the import folder, a library folder, or inside one.
+    func contains(_ folder: URL) -> Bool {
+        let path = folder.standardizedFileURL.path
+        return ([Self.importFolder] + folders).contains { root in
+            let rootPath = root.standardizedFileURL.path
+            return path == rootPath || path.hasPrefix(rootPath.hasSuffix("/") ? rootPath : rootPath + "/")
+        }
     }
 
     /// The measurement's rig: the user's choice if any, otherwise guessed from its folder and file name.

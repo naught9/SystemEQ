@@ -274,7 +274,7 @@ struct AutoEQView: View {
                 Spacer()
                 Button("Use Now") { if let preset = namedPreset { model.useUnsaved(preset) } }
                     .help("Listen to this preset now. You can then fine-tune it in the Equalizer window.")
-                Button("Save as Preset", action: save)
+                Button("Save as Preset…", action: save)
                     .keyboardShortcut(.defaultAction)
             }
             .disabled(result == nil)
@@ -311,18 +311,11 @@ struct AutoEQView: View {
     }
 
     private func save() {
-        guard let preset = namedPreset else { return }
-        if PresetLibrary.importedPresetExists(named: preset.name) {
-            let confirm = NSAlert()
-            confirm.messageText = "Replace “\(preset.name)”?"
-            confirm.informativeText = "A preset with this name is already in your library."
-            confirm.addButton(withTitle: "Replace")
-            confirm.addButton(withTitle: "Cancel")
-            guard confirm.runModal() == .alertFirstButtonReturn else { return }
-        }
+        guard let preset = namedPreset,
+              let url = PresetLibrary.chooseSaveLocation(suggestedName: preset.name) else { return }
         do {
             model.useUnsaved(preset)
-            try model.saveToLibrary(named: preset.name)
+            try model.saveAs(to: url)
         } catch {
             errorMessage = error.localizedDescription
         }

@@ -184,29 +184,9 @@ struct EditorView: View {
     }
 
     private func saveToLibrary() {
-        let alert = NSAlert()
-        alert.messageText = "Save as Preset"
-        alert.informativeText = "The preset is added to your library's Imported folder."
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        field.stringValue = model.preset.name
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        NSApp.activate()
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
-        if PresetLibrary.importedPresetExists(named: name) {
-            let confirm = NSAlert()
-            confirm.messageText = "Replace “\(name)”?"
-            confirm.informativeText = "A preset with this name is already in your library."
-            confirm.addButton(withTitle: "Replace")
-            confirm.addButton(withTitle: "Cancel")
-            guard confirm.runModal() == .alertFirstButtonReturn else { return }
-        }
+        guard let url = PresetLibrary.chooseSaveLocation(suggestedName: model.preset.name) else { return }
         do {
-            try model.saveToLibrary(named: name)
+            try model.saveAs(to: url)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -543,5 +523,20 @@ extension ParametricPreset {
     /// The highest point of the combined response, preamp included, in dB.
     var peakResponseDB: Double {
         FrequencyResponse.logGrid(pointsPerOctave: 48).map { responseDB(at: $0) }.max() ?? preampDB
+    }
+}
+
+extension PresetLibrary {
+    /// Asks where to save a preset, starting in the folder last saved to, and remembers the folder chosen.
+    static func chooseSaveLocation(suggestedName: String) -> URL? {
+        let panel = NSSavePanel()
+        panel.title = "Save as Preset"
+        panel.nameFieldStringValue = fileName(for: suggestedName)
+        panel.directoryURL = saveFolder
+        panel.allowedContentTypes = [.plainText]
+        NSApp.activate()
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        saveFolder = url.deletingLastPathComponent()
+        return url
     }
 }
