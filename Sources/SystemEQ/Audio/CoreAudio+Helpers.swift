@@ -50,6 +50,16 @@ extension AudioObjectID {
         return value?.takeRetainedValue() as String? ?? ""
     }
 
+    /// Reads a variable-length list of objects, such as the system's taps.
+    func readObjectList(_ selector: AudioObjectPropertySelector) throws -> [AudioObjectID] {
+        var address = AudioObjectPropertyAddress(selector)
+        var size: UInt32 = 0
+        try check(AudioObjectGetPropertyDataSize(self, &address, 0, nil, &size), "Reading the size of property \(selector)")
+        var objects = [AudioObjectID](repeating: .unknown, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        try check(AudioObjectGetPropertyData(self, &address, 0, nil, &size, &objects), "Reading property \(selector)")
+        return Array(objects.prefix(Int(size) / MemoryLayout<AudioObjectID>.size))
+    }
+
     static func defaultOutputDevice() throws -> AudioDeviceID {
         let device = try system.read(kAudioHardwarePropertyDefaultOutputDevice, default: unknown)
         guard device != unknown else { throw CoreAudioError(operation: "Finding the default output device", status: kAudioHardwareBadDeviceError) }

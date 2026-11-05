@@ -29,6 +29,14 @@ final class SystemAudioEQ {
     private(set) var sampleRate = 48_000.0
 
     private var tapID = AudioObjectID.unknown
+    private var tapUID: String?
+    /// UIDs of every tap we've created that isn't confirmed destroyed. A tap created while Core Audio
+    /// is reconfiguring a device can survive `AudioHardwareDestroyProcessTap` and keep muting
+    /// everything, so leftovers are found in the system's tap list and destroyed until they're gone.
+    private var ownedTaps: Set<String> = []
+    private var sweep: DispatchWorkItem?
+    /// The device the current chain plays on, so redundant default-device notifications are ignored.
+    private var outputDevice = AudioObjectID.unknown
     private var aggregateID = AudioObjectID.unknown
     private var ioProcID: AudioDeviceIOProcID?
     private var systemListeners: [(AudioObjectPropertySelector, AudioObjectPropertyListenerBlock)] = []
@@ -40,13 +48,23 @@ final class SystemAudioEQ {
     private var lastCycleTime = SuspendingClock.now
     private var builtAt = SuspendingClock.now
     private var retry: DispatchWorkItem?
+    private var deviceChange: DispatchWorkItem?
+    private var deviceChangeForced = false
     private var consecutiveFailures = 0
+    /// Set once retries are exhausted. Nothing rebuilds until the user turns the EQ on again
+    /// or Core Audio restarts, so a persistent problem can't keep cutting audio out.
+    private var gaveUp = false
     private var recoveringServiceRestart = false
 
     /// How long the render callback may go uncalled before the tap is removed.
     private static let stallLimit = Duration.milliseconds(1500)
     /// Delays between attempts to recover from a stall or failed start, after which we give up.
     private static let retryDelays: [Double] = [1, 3, 10, 30]
+    /// Device changes arrive in bursts (Bluetooth handoffs, wake from sleep), and building while
+    /// Core Audio is still reconfiguring fails, so rebuilds wait for the burst to settle.
+    private static let deviceChangeDelay = 0.5
+    /// How often leftover taps are retried until they're destroyed.
+    private static let sweepInterval = 2.0
 
     var isRunning: Bool {
         if case .running = state { true } else { false }
@@ -55,6 +73,7 @@ final class SystemAudioEQ {
     func start() {
         stop()
         consecutiveFailures = 0
+        gaveUp = false
         watchSystem()
         rebuild()
     }
@@ -67,6 +86,8 @@ final class SystemAudioEQ {
         systemListeners = []
         retry?.cancel()
         retry = nil
+        deviceChange?.cancel()
+        deviceChange = nil
         recoveringServiceRestart = false
         tearDown()
         state = .stopped
@@ -75,6 +96,8 @@ final class SystemAudioEQ {
     private func rebuild() {
         retry?.cancel()
         retry = nil
+        deviceChange?.cancel()
+        deviceChange = nil
         tearDown()
         do {
             try build()
@@ -91,6 +114,7 @@ final class SystemAudioEQ {
     private func scheduleRetry() {
         guard consecutiveFailures < Self.retryDelays.count else {
             log.error("Giving up after \(self.consecutiveFailures, privacy: .public) attempts")
+            gaveUp = true
             return
         }
         let delay = Self.retryDelays[consecutiveFailures]
@@ -105,6 +129,26 @@ final class SystemAudioEQ {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
+    /// Rebuilds once a burst of device notifications settles. Unless `force` is set (a device died),
+    /// the rebuild is skipped when we're already playing on the default output device.
+    private func scheduleDeviceRebuild(force: Bool) {
+        guard !gaveUp else { return }
+        deviceChangeForced = deviceChangeForced || force
+        deviceChange?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, !self.systemListeners.isEmpty, !self.recoveringServiceRestart, !self.gaveUp else { return }
+                let forced = self.deviceChangeForced
+                self.deviceChangeForced = false
+                self.deviceChange = nil
+                if !forced, self.isRunning, (try? AudioObjectID.defaultOutputDevice()) == self.outputDevice { return }
+                self.rebuild()
+            }
+        }
+        deviceChange = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.deviceChangeDelay, execute: work)
+    }
+
     private func build() throws {
         let outputDevice = try AudioObjectID.defaultOutputDevice()
         let outputUID = try outputDevice.readString(kAudioDevicePropertyDeviceUID)
@@ -116,6 +160,10 @@ final class SystemAudioEQ {
         description.uuid = UUID()
         description.isPrivate = true
         description.muteBehavior = .muted
+        // Recorded before creating, so a tap is swept up even if creation half-fails.
+        let uid = description.uuid.uuidString.uppercased()
+        ownedTaps.insert(uid)
+        tapUID = uid
         try check(AudioHardwareCreateProcessTap(description, &tapID), "Creating the system audio tap")
 
         let tapFormat = try tapID.read(kAudioTapPropertyFormat, default: AudioStreamBasicDescription())
@@ -152,6 +200,7 @@ final class SystemAudioEQ {
         try check(AudioDeviceStart(aggregateID, ioProcID), "Starting audio")
         startWatchdog()
 
+        self.outputDevice = outputDevice
         state = .running(outputDevice: outputName)
 
         let deviceRate = (try? outputDevice.read(kAudioDevicePropertyNominalSampleRate, default: Float64(0))) ?? 0
@@ -179,16 +228,59 @@ final class SystemAudioEQ {
                     AudioDeviceStop(aggregateID, ioProcID)
                     AudioDeviceDestroyIOProcID(aggregateID, ioProcID)
                 }
-                AudioHardwareDestroyAggregateDevice(aggregateID)
+                let status = AudioHardwareDestroyAggregateDevice(aggregateID)
+                if status != noErr {
+                    log.error("Destroying the output device failed (\(status.fourCharCode, privacy: .public))")
+                }
             }
             if tapID != .unknown {
-                AudioHardwareDestroyProcessTap(tapID)
+                let status = AudioHardwareDestroyProcessTap(tapID)
+                if status != noErr {
+                    log.error("Destroying the tap failed (\(status.fourCharCode, privacy: .public)); will retry")
+                }
             }
+        } else {
+            ownedTaps = []
         }
         deviceListeners = []
         ioProcID = nil
         aggregateID = .unknown
         tapID = .unknown
+        tapUID = nil
+        outputDevice = .unknown
+        destroyLeakedTaps()
+    }
+
+    /// Destroys every tap we created that's still in the system's tap list, other than the current one.
+    /// Our taps are private, so the list only shows them and other apps' public taps. A tap is only
+    /// forgotten once it's gone from the list, and the check repeats on a timer until then, even after
+    /// giving up or stopping, because a leftover tap mutes everything.
+    private func destroyLeakedTaps() {
+        sweep?.cancel()
+        sweep = nil
+        let leaked = ownedTaps.subtracting(tapUID.map { [$0] } ?? [])
+        guard !leaked.isEmpty else { return }
+
+        var listed: Set<String> = []
+        do {
+            for tap in try AudioObjectID.system.readObjectList(kAudioHardwarePropertyTapList) where tap != tapID {
+                guard let uid = try? tap.readString(kAudioTapPropertyUID).uppercased(), leaked.contains(uid) else { continue }
+                listed.insert(uid)
+                let status = AudioHardwareDestroyProcessTap(tap)
+                log.error("Destroying leftover tap \(tap, privacy: .public): \(status == noErr ? "done" : status.fourCharCode, privacy: .public)")
+            }
+        } catch {
+            log.error("Listing taps failed: \(error.localizedDescription, privacy: .public)")
+            listed = leaked
+        }
+        // Taps missing from the list never got created or are confirmed destroyed.
+        ownedTaps.subtract(leaked.subtracting(listed))
+        guard !listed.isEmpty else { return }
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.destroyLeakedTaps() }
+        }
+        sweep = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.sweepInterval, execute: work)
     }
 
     // MARK: Watchdog
@@ -234,7 +326,7 @@ final class SystemAudioEQ {
         let defaultDeviceListener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             MainActor.assumeIsolated {
                 guard let self, !self.systemListeners.isEmpty, !self.recoveringServiceRestart else { return }
-                self.rebuild()
+                self.scheduleDeviceRebuild(force: false)
             }
         }
         // When coreaudiod restarts, every object we made is gone and our listeners with it.
@@ -254,6 +346,7 @@ final class SystemAudioEQ {
                         guard let self, self.recoveringServiceRestart else { return }
                         self.recoveringServiceRestart = false
                         self.consecutiveFailures = 0
+                        self.gaveUp = false
                         self.rebuild()
                     }
                 }
@@ -294,7 +387,7 @@ final class SystemAudioEQ {
                     let alive = (try? object.read(kAudioDevicePropertyDeviceIsAlive, default: UInt32(0))) ?? 0
                     guard alive == 0 else { return }
                     log.error("An audio device died; rebuilding")
-                    self.rebuild()
+                    self.scheduleDeviceRebuild(force: true)
                 }
             }
         }
